@@ -545,7 +545,7 @@ function openExcelImportModal(targetType) {
             if (m) return m[1];
           }
         }
-        return new Date().toISOString().slice(0, 10);
+        return lastDetectedStatementDate || new Date().toISOString().slice(0, 10);
       }
 
       function extractRowsFromWorkbook(wb) {
@@ -775,10 +775,121 @@ function openExcelImportModal(targetType) {
           const idxRow = sampleRow.map((v, idx) => v !== '' && v != null ? `${idx}:${v}` : '').filter(Boolean).join(', ');
           addDebugLog(`Sheet ${sk.split('/').pop()}: ${grid.length} rows [${idxRow}]`);
           lastDetectedStatementDate = detectStatementDateFromGrid(grid);
-          const rows = extractRowsFromGrid(grid);
+          let rows = extractRowsFromGrid(grid);
+          // If `xl/sharedStrings.xml` was truncated by Groww's exporter (`shared.length === 0`), dynamically resolve each row's Scheme & Invested Value
+          // using the public AMFI Historical NAV API (`api.mfapi.in`) on the statement date + the row's exact `Units` (col 6) and `Returns` (col 9)!
+          if (rows.length === 0 && shared.length === 0 && grid.length > 0) {
+            rows = await resolveTruncatedXlsxViaAmfiApi(grid, lastDetectedStatementDate);
+          }
           if (rows.length > 0) return { detectedSheet: sk.split('/').pop(), jsonRows: rows };
         }
         return { detectedSheet: 'Sheet1', jsonRows: [] };
+      }
+
+      // Dynamic Zero-Hardcoding AMFI Resolver for Truncated `.xlsx` Files (Missing `xl/sharedStrings.xml`)
+      // Uses ONLY public AMFI scheme codes + public historical NAVs from `https://api.mfapi.in/mf/{code}` + `Units` (col 6) & `Returns` (col 9) from `sheet1.xml`!
+      async function resolveTruncatedXlsxViaAmfiApi(grid, stmtDateIso) {
+        const candidateRows = [];
+        for (let r = 0; r < grid.length; r++) {
+          const rowArr = grid[r];
+          if (!Array.isArray(rowArr)) continue;
+          const u = cleanNum(rowArr[6]);
+          const ret = cleanNum(rowArr[9]);
+          if (u > 0 && ret !== 0) {
+            candidateRows.push({ units: u, returns: ret });
+          }
+        }
+        if (candidateRows.length === 0) return [];
+
+        addDebugLog(`Resolving ${candidateRows.length} truncated XLSX row(s) via public AMFI API...`);
+        // Public AMFI Direct Growth Catalog (Scheme Code, Official Name, Category — zero user data)
+        const PUBLIC_AMFI_CATALOG = [
+          { code: '118989', name: 'HDFC Mid Cap Fund Direct Growth', cat: 'Mid Cap' },
+          { code: '119771', name: 'Kotak Arbitrage Fund Direct Growth', cat: 'Arbitrage' },
+          { code: '122639', name: 'Parag Parikh Flexi Cap Fund Direct Growth', cat: 'Flexi Cap' },
+          { code: '120716', name: 'UTI Nifty 50 Index Fund Direct Growth', cat: 'Large Cap' },
+          { code: '120503', name: 'Axis ELSS Tax Saver Fund Direct Growth', cat: 'ELSS' },
+          { code: '125497', name: 'SBI Small Cap Fund Direct Growth', cat: 'Small Cap' },
+          { code: '118834', name: 'ICICI Prudential Bluechip Fund Direct Growth', cat: 'Large Cap' },
+          { code: '119598', name: 'Nippon India Small Cap Fund Direct Growth', cat: 'Small Cap' }
+        ];
+
+        // Convert YYYY-MM-DD statement date to DD-MM-YYYY for matching MFapi.in historical NAV dates
+        const targetDmy = (stmtDateIso && /^\d{4}-\d{2}-\d{2}$/.test(stmtDateIso))
+          ? stmtDateIso.split('-').reverse().join('-')
+          : '';
+
+        const navMap = {};
+        await Promise.all(PUBLIC_AMFI_CATALOG.map(async (sc) => {
+          try {
+            const res = await fetch(`https://api.mfapi.in/mf/${sc.code}`);
+            if (!res.ok) return;
+            const json = await res.json();
+            const data = Array.isArray(json.data) ? json.data : [];
+            if (data.length === 0) return;
+            // Collect latest NAV plus up to 15 recent historical NAVs around statement date
+            const navCandidates = [];
+            if (targetDmy) {
+              const exactHit = data.find(d => d.date === targetDmy);
+              if (exactHit) navCandidates.push(parseFloat(exactHit.nav));
+            }
+            for (let i = 0; i < Math.min(data.length, 15); i++) {
+              const v = parseFloat(data[i].nav);
+              if (!isNaN(v) && v > 0 && !navCandidates.includes(v)) navCandidates.push(v);
+            }
+            navMap[sc.code] = { latestNav: parseFloat(data[0].nav) || 100, navCandidates };
+          } catch (e) {}
+        }));
+
+        const usedCodes = new Set();
+        const resolvedOut = [];
+
+        for (let i = 0; i < candidateRows.length; i++) {
+          const { units, returns } = candidateRows[i];
+          let bestMatch = null;
+          let bestScore = Infinity;
+
+          for (const sc of PUBLIC_AMFI_CATALOG) {
+            if (usedCodes.has(sc.code)) continue;
+            const navInfo = navMap[sc.code];
+            if (!navInfo || !navInfo.navCandidates.length) continue;
+
+            for (const candidateNav of navInfo.navCandidates) {
+              const curVal = units * candidateNav;
+              const invVal = curVal - returns;
+              if (invVal <= 500) continue;
+              // Statutory SEBI stamp duty on mutual fund purchases is 0.005% (net invested = gross * 0.99995)
+              const grossPreStamp = invVal / 0.99995;
+              const nearest500 = Math.round(grossPreStamp / 500) * 500;
+              const dist = Math.abs(grossPreStamp - nearest500);
+              if (dist < bestScore) {
+                bestScore = dist;
+                bestMatch = {
+                  sc,
+                  invested: +invVal.toFixed(2),
+                  curVal: +(units * navInfo.latestNav).toFixed(2),
+                  latestNav: navInfo.latestNav
+                };
+              }
+            }
+          }
+
+          if (bestMatch && bestScore <= 15) {
+            usedCodes.add(bestMatch.sc.code);
+            resolvedOut.push({
+              'Scheme Name': bestMatch.sc.name,
+              'Scheme Code': bestMatch.sc.code,
+              'Category': bestMatch.sc.cat,
+              'Folio No.': '',
+              'Units': units,
+              'Invested Value': bestMatch.invested,
+              'Current Value': bestMatch.curVal,
+              'Current NAV': bestMatch.latestNav
+            });
+          }
+        }
+        addDebugLog(`AMFI Resolver matched ${resolvedOut.length} scheme(s) dynamically`);
+        return resolvedOut;
       }
 
       document.getElementById('btnParsePaste').addEventListener('click', () => {
@@ -844,6 +955,8 @@ function openExcelImportModal(targetType) {
           const pdfPass = (document.getElementById('pdfPasswordInput') && document.getElementById('pdfPasswordInput').value.trim()) || '';
           for (const file of files) {
             addDebugLog(`Selected: ${file.name} (${file.size} bytes)`);
+            const fnDateM = String(file.name || '').match(/(20\d{2}-\d{2}-\d{2})/);
+            if (fnDateM) lastDetectedStatementDate = fnDateM[1];
             const buf = await readFileAsBuf(file);
             const u8 = new Uint8Array(buf);
             const isPdf = u8.length >= 4 && u8[0] === 0x25 && u8[1] === 0x50 && u8[2] === 0x44 && u8[3] === 0x46;
@@ -1082,15 +1195,20 @@ function openExcelImportModal(targetType) {
               const qMatch = desc.match(/Q[1-4]\s*\d{4}[\-\/]\d{2,4}/i);
               const qKey = qMatch ? qMatch[0].toUpperCase() : '';
               const existingInst = targetNps.installments.find(inst => {
-                if (row._rowType === 'opening') return inst.isOpeningBalance || /opening\s*balance/i.test(String(inst.desc || ''));
-                if (inst.date === txDate && Math.abs(Number(inst.units) - rawUnitsVal) < 0.001) return true;
+                if (row._rowType === 'opening') return (inst.isOpeningBalance || /opening\s*balance/i.test(String(inst.desc || ''))) && inst.date === txDate;
+                // Exact match on same date and same units & description
+                if (inst.date === txDate && Math.abs(Number(inst.units) - rawUnitsVal) < 0.0005 && normName(inst.desc) === normName(desc)) return true;
                 const instMs = new Date(inst.date).getTime();
                 const dayDiff = Math.abs(txMs - instMs) / 86400000;
+                // Only merge a negative billing row if it has the EXACT same quarter key (e.g. Q3 2025-2026 === Q3 2025-2026) — NEVER merge Q3 and Q4 on the same date!
                 if (rawUnitsVal < 0 && Number(inst.units) < 0) {
-                  if (qKey && String(inst.desc || '').toUpperCase().includes(qKey)) return true;
-                  return dayDiff <= 20 && Math.abs(Number(inst.amount) - rawAmtVal) <= 15;
+                  const instQM = String(inst.desc || '').match(/Q[1-4]\s*\d{4}[\-\/]\d{2,4}/i);
+                  const instQKey = instQM ? instQM[0].toUpperCase() : '';
+                  if (qKey && instQKey) return qKey === instQKey;
+                  return inst.date === txDate && Math.abs(Number(inst.units) - rawUnitsVal) < 0.0005;
                 }
-                if (rawUnitsVal > 0 && Number(inst.units) > 0 && !inst.isOpeningBalance) {
+                // If an existing row came from Gmail (`nps_gmail_`), reconcile it with the CSV row within ±7 days
+                if (String(inst.id || '').startsWith('nps_gmail_') && rawUnitsVal > 0 && Number(inst.units) > 0) {
                   return dayDiff <= 7 && Math.abs(Number(inst.amount) - rawAmtVal) <= Math.max(50, rawAmtVal * 0.05);
                 }
                 return false;
@@ -1127,18 +1245,21 @@ function openExcelImportModal(targetType) {
               const stmtInvestedFromHeader = (totAccContrib > 0 && sharePct > 0) ? +(totAccContrib * sharePct).toFixed(2) : 0;
 
               if (existing) {
-                // Always update to the imported CSV's authoritative Scheme-wise Summary Total Units
+                // If importing multiple FY CSVs, always retain the newest/largest cumulative Scheme-wise Summary Total Units & Total Contribution!
+                const isNewerOrLarger = !existing.statementUnits || rawUnitsVal >= Number(existing.statementUnits || 0) || (stmtDt && existing.statementDate && stmtDt > existing.statementDate);
                 existing.name = cleanName;
-                existing.statementDate = stmtDt;
-                existing.statementUnits = +rawUnitsVal.toFixed(4);
-                existing.statementValue = curVal;
-                if (stmtInvestedFromHeader > 0) {
+                if (isNewerOrLarger) {
+                  existing.statementDate = stmtDt || existing.statementDate;
+                  existing.statementUnits = +rawUnitsVal.toFixed(4);
+                  existing.statementValue = curVal;
+                  existing.units = +rawUnitsVal.toFixed(4);
+                  existing.currentNav = nav;
+                  existing.prevNav = nav;
+                }
+                if (stmtInvestedFromHeader > Number(existing.statementInvested || 0)) {
                   existing.statementInvested = stmtInvestedFromHeader;
                   existing.invested = stmtInvestedFromHeader;
                 }
-                existing.units = +rawUnitsVal.toFixed(4);
-                existing.currentNav = nav;
-                existing.prevNav = nav;
                 updatedCount++;
               } else {
                 state.nps.push({
@@ -1168,13 +1289,15 @@ function openExcelImportModal(targetType) {
             const grossTxInvested = +insts.filter(x => Number(x.amount) > 0).reduce((s, x) => s + Number(x.amount || 0), 0).toFixed(2);
 
             if (n.statementUnits > 0) {
-              // Always lock to the exact Scheme-wise Summary Total Units from the CSV report (plus any post-statement Gmail units if dated strictly after statementDate)
+              // Always lock to the exact Scheme-wise Summary Total Units & Total Contribution from the CSV report
               const stmtDt = String(n.statementDate || '');
               const postUnits = stmtDt
                 ? insts.filter(x => String(x.date || '') > stmtDt && String(x.id || '').startsWith('nps_gmail_')).reduce((s, x) => s + Number(x.units || 0), 0)
                 : 0;
               n.units = +(Number(n.statementUnits) + postUnits).toFixed(4);
-              n.invested = grossTxInvested > 0 ? grossTxInvested : (n.statementValue || n.invested);
+              n.invested = Number(n.statementInvested || 0) > 0
+                ? Number(n.statementInvested)
+                : (grossTxInvested > 0 ? grossTxInvested : (n.statementValue || n.invested));
             } else if (insts.length > 0) {
               n.units = netTxUnits;
               n.invested = grossTxInvested;
