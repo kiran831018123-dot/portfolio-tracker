@@ -85,63 +85,33 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
           });
         }
 
-        // 5. Automatic Future Quarterly NPS Maintenance Billing Deduction Engine (Between Annual CSV Uploads):
-        // Protean CRA deducts quarterly maintenance charges around Jan 05 (Q3), Apr 05 (Q4), Jul 05 (Q1), and Oct 05 (Q2).
-        // For any quarterly billing date strictly AFTER `statementDate` and on or before today, auto-deduct estimated quarterly units if not yet logged!
-        const todayIso = new Date().toISOString().slice(0, 10);
-        const startYr = stmtDate ? parseInt(stmtDate.slice(0, 4), 10) : 2026;
-        const endYr = parseInt(todayIso.slice(0, 4), 10) + 1;
-        const estChargeAmt = /SCHEME\s*[\-:]?\s*E\b/i.test(n.name) ? -21.80 : (/SCHEME\s*[\-:]?\s*C\b/i.test(n.name) ? -3.05 : -4.55);
-
-        for (let yr = startYr; yr <= endYr; yr++) {
-          const quarterSchedule = [
-            { date: `${yr}-01-05`, qLabel: `Q3 ${yr - 1}-${yr}` },
-            { date: `${yr}-04-05`, qLabel: `Q4 ${yr - 1}-${yr}` },
-            { date: `${yr}-07-05`, qLabel: `Q1 ${yr}-${yr + 1}` },
-            { date: `${yr}-10-05`, qLabel: `Q2 ${yr}-${yr + 1}` }
-          ];
-          quarterSchedule.forEach(q => {
-            if (stmtDate && q.date <= stmtDate) return;
-            if (q.date > todayIso) return;
-            const hasQuarterBill = n.installments.some(x =>
-              String(x.desc || '').toUpperCase().includes(q.qLabel.toUpperCase()) ||
-              (Number(x.units) < 0 && Math.abs(new Date(x.date).getTime() - new Date(q.date).getTime()) <= 20 * 86400000)
-            );
-            if (!hasQuarterBill && Number(n.currentNav) > 0) {
-              const estUnits = +(estChargeAmt / Number(n.currentNav)).toFixed(4);
-              n.installments.push({
-                id: 'nps_autobill_' + n.schemeId + '_' + q.qLabel.replace(/\s+/g, '_'),
-                date: q.date,
-                desc: `Billing for ${q.qLabel} (Auto Quarterly CRA Deduction)`,
-                amount: estChargeAmt,
-                nav: Number(n.currentNav),
-                units: estUnits,
-                isEstimatedBilling: true
-              });
-            }
-          });
-        }
-
+        // 5. Purge any synthetic `isEstimatedBilling` (`nps_autobill_`) rows so ONLY authentic rows imported from the user's CSV reports exist!
+        n.installments = n.installments.filter(x => !x.isEstimatedBilling && !String(x.id || '').startsWith('nps_autobill_'));
         n.installments.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
-        // 6. Reconcile exact units:
-        // `statementUnits` (from CSV Section 1 Scheme-wise Summary, which already has all prior contributions minus quarterly billing deductions)
-        // + any post-statement installments (Gmail contributions AND auto-quarterly billing deductions dated strictly after `statementDate`)!
+        // 6. Reconcile exact units & invested capital strictly from the imported CSV report:
+        // `statementUnits` (from CSV Section 1 Scheme-wise Summary) is the authoritative balance as of `statementDate`.
         const allTxNetUnits = +n.installments.reduce((acc, x) => acc + Number(x.units || 0), 0).toFixed(4);
-        const grossTxInv = +n.installments.filter(x => Number(x.amount) > 0).reduce((acc, x) => acc + Number(x.amount || 0), 0).toFixed(2);
+        const grossTxInv = +n.installments.filter(x => Number(x.amount) > 0 && !x.isOpeningBalance).reduce((acc, x) => acc + Number(x.amount || 0), 0).toFixed(2);
         const baseUnits = Number(n.statementUnits || 0);
+        const baseInv = Number(n.statementInvested || 0);
 
-        if (baseUnits > 0 && stmtDate) {
-          const postInst = n.installments.filter(x => String(x.date || '') > stmtDate);
+        if (baseUnits > 0) {
+          const postInst = stmtDate
+            ? n.installments.filter(x => String(x.date || '') > stmtDate && String(x.id || '').startsWith('nps_gmail_'))
+            : [];
           const postUnits = postInst.reduce((acc, x) => acc + Number(x.units || 0), 0);
           const postInv = postInst.filter(x => Number(x.amount) > 0).reduce((acc, x) => acc + Number(x.amount || 0), 0);
           n.units = +(baseUnits + postUnits).toFixed(4);
-          n.invested = Number(n.statementInvested || 0) > 0
-            ? +(Number(n.statementInvested) + postInv).toFixed(2)
-            : (grossTxInv > 0 ? grossTxInv : n.invested);
+          if (baseInv > 0) {
+            n.invested = +(baseInv + postInv).toFixed(2);
+          } else if (grossTxInv > 0) {
+            n.invested = grossTxInv;
+          }
         } else if (n.installments.length > 0) {
           n.units = allTxNetUnits;
-          if (grossTxInv > 0) n.invested = grossTxInv;
+          if (baseInv > 0) n.invested = baseInv;
+          else if (grossTxInv > 0) n.invested = grossTxInv;
         }
       });
       if (st.ppf && Array.isArray(st.ppf.installments) && st.ppf.installments.length > 0) {
@@ -1300,13 +1270,19 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
       // 100% Client-Side Dynamic NPS NAV Resolution (Zero code.gs / UrlFetchApp calls; works on GitHub Pages & Apps Script across ALL 11 PFMs/POPs)
       async function fetchUrlTextClientCors(targetUrl) {
         const relays = [
-          `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-          `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`
+          { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`, isJson: true },
+          { url: `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`, isJson: false },
+          { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`, isJson: false },
+          { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, isJson: false }
         ];
-        for (const rUrl of relays) {
+        for (const r of relays) {
           try {
-            const resp = await fetch(rUrl);
-            if (resp.ok) {
+            const resp = await fetch(r.url);
+            if (!resp.ok) continue;
+            if (r.isJson) {
+              const j = await resp.json();
+              if (j && j.contents && String(j.contents).length > 100) return String(j.contents);
+            } else {
               const txt = await resp.text();
               if (txt && txt.length > 100) return txt;
             }
@@ -1334,13 +1310,15 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
         }
         const htmlText = pfmHtmlCache[pfmEntry.url];
         if (!htmlText) return null;
+        // Strip HTML tags to plain space-separated text so table cell attributes never block regex matching
+        const plainText = htmlText.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
         const letterM = upper.match(/SCHEME\s*[\-:]?\s*([ECGA])\b/);
         const letter = letterM ? letterM[1] : '';
         const tier = /TIER\s*[\-:]?\s*(?:II|2)\b/.test(upper) ? 'TIER\\s*II' : 'TIER\\s*I(?!I)';
         const planType = /\bDIRECT\b/.test(upper) ? 'DIRECT' : (/\bGS\b/.test(upper) ? 'GS' : 'POP');
         if (!letter) return null;
-        const dynRe = new RegExp('SCHEME\\s*' + letter + '\\s*-?\\s*' + tier + '\\s*' + planType + '[\\s\\S]{0,180}?([0-9]{2}\\.[0-9]{4})', 'i');
-        const m = htmlText.match(dynRe);
+        const dynRe = new RegExp('SCHEME\\s*' + letter + '\\s*-?\\s*' + tier + '\\s*' + planType + '\\s+([0-9]{2}\\.[0-9]{4})', 'i');
+        const m = plainText.match(dynRe);
         if (m && m[1]) {
           const val = parseFloat(m[1]);
           if (!isNaN(val) && val > 0) return val;
