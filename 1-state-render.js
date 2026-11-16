@@ -29,10 +29,19 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
     };
 
     function sanitizeNpsState(st) {
-      if (!st || !Array.isArray(st.nps)) return st;
+      if (!st) return st;
+      if (Array.isArray(st.mutualFunds)) {
+        st.mutualFunds = st.mutualFunds.filter(f => {
+          if (!f) return false;
+          const isDummyFolio = /^Mutual Fund \(Folio/i.test(String(f.name || '').trim());
+          if (isDummyFolio && Number(f.invested || 0) <= 0) return false;
+          return true;
+        });
+      }
+      if (!Array.isArray(st.nps)) return st;
       st.nps.forEach(n => {
         if (!Array.isArray(n.installments)) n.installments = [];
-        // 1. Strip any bogus ₹0 summary lines (like `2026-11-13 | ₹0.00 | +2766.5204 units`), while keeping valid `Opening Balance (B/F)` rows and negative CRA billing deductions
+        // 1. Strip any bogus ₹0 summary lines , while keeping valid `Opening Balance (B/F)` rows and negative CRA billing deductions
         n.installments = n.installments.filter(inst => {
           const amt = Number(inst.amount || 0);
           const u = Number(inst.units || 0);
@@ -431,6 +440,7 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
     }
 
     function openProfileSidebar() {
+      pushNavState('sidebar_profile');
       renderProfileTab();
       document.querySelectorAll('#tab-guide details').forEach(d => d.removeAttribute('open'));
       const sb = document.getElementById('profileSidebarBackdrop');
@@ -492,7 +502,24 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
       if (hdr) hdr.textContent = 'NPS Vault';
     }
 
-    function switchTab(tab, subOption) {
+    let isHandlingPopState = false;
+    function pushNavState(viewTag) {
+      if (isHandlingPopState) return;
+      try {
+        if (!history.state || history.state.wlView !== viewTag) {
+          history.pushState({ wlView: viewTag }, '');
+        }
+      } catch (e) {}
+    }
+
+    function triggerHaptic(ms) {
+      try {
+        if (navigator.vibrate) navigator.vibrate(ms || 8);
+      } catch (e) {}
+    }
+
+    function switchTab(tab, fromBackGesture) {
+      triggerHaptic(6);
       if (tab === 'guide') {
         openProfileSidebar();
         return;
@@ -501,6 +528,9 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
       backToMfDashboard();
       backToNpsDashboard();
       activeTab = tab;
+      if (!fromBackGesture && tab !== 'overview') {
+        pushNavState('tab_' + tab);
+      }
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
       const targetEl = document.getElementById('tab-' + tab);
       if (targetEl) targetEl.classList.remove('hidden');
@@ -1437,6 +1467,7 @@ const STORAGE_KEY = 'wealthlocal_portfolio_v16';
     }
 
     function openModal(title, html) {
+      pushNavState('modal_dialog');
       document.getElementById('modalTitle').textContent = title;
       document.getElementById('modalBody').innerHTML = html;
       document.getElementById('modalBackdrop').classList.remove('hidden');
