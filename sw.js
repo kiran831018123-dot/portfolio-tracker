@@ -1,5 +1,5 @@
-// Portfolio Tracker v17.0 PWA Service Worker
-const CACHE_NAME = 'portfolio-tracker-v17';
+// Portfolio Tracker v19.0 PWA Service Worker (Network-First for Instant Updates)
+const CACHE_NAME = 'portfolio-tracker-v19';
 const ASSETS = [
   './',
   './index.html',
@@ -27,10 +27,16 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = event.request.url;
-  if (url.includes('api.mfapi.in') || url.includes('npsnav.in') || url.includes('script.google.com')) {
+  if (url.includes('api.mfapi.in') || url.includes('npsnav.in') || url.includes('script.google.com') || url.includes('allorigins.win') || url.includes('codetabs.com')) {
     return;
   }
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request)
+      .then((res) => {
+        const clone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
