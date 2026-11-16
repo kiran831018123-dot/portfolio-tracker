@@ -57,14 +57,14 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
             cipher: encryptedCipher
           }));
         }
+        const bundleStr = JSON.stringify({
+          _encryptedBundle: true,
+          secConfig,
+          encryptedStateCipher: encryptedCipher,
+          updatedAt: Date.now()
+        });
         if (typeof window.google !== 'undefined' && window.google.script && window.google.script.run) {
           // Store ONLY encryptedCipher (never plain-text `state`) inside Google Apps Script PropertiesService!
-          const bundleStr = JSON.stringify({
-            _encryptedBundle: true,
-            secConfig,
-            encryptedStateCipher: encryptedCipher,
-            updatedAt: Date.now()
-          });
           window.google.script.run
             .withSuccessHandler(() => {
               const badge = document.getElementById('vaultSyncStatusBadge');
@@ -72,6 +72,20 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
             })
             .withFailureHandler(() => {})
             .saveServerAppBundle(bundleStr);
+        } else {
+          // When hosted on GitHub Pages, if a Personal Apps Script URL is saved, push the AES-256-GCM encrypted vault in the background via POST!
+          const bridgeUrl = (state.gmailWebhookUrl || localStorage.getItem('wl_gas_bridge_url') || '').trim();
+          if (bridgeUrl && bridgeUrl.startsWith('https://script.google.com/')) {
+            fetch(bridgeUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({ action: 'saveVault', bundle: bundleStr, authHash: (secConfig && secConfig.adminPinHash) || '' })
+            }).then(() => {
+              const badge = document.getElementById('vaultSyncStatusBadge');
+              if (badge) badge.textContent = 'AES-256 Cloud Synced';
+            }).catch(() => {});
+          }
         }
       } catch (e) {}
     }
@@ -1022,6 +1036,112 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
       if (btn) btn.addEventListener('click', toggleAppTheme);
     });
 
+    // Hard Reload / Cache Refresh Button in Profile Sidebar
+    const btnHardReload = document.getElementById('btnSidebarHardReload');
+    if (btnHardReload) {
+      btnHardReload.addEventListener('click', async () => {
+        showToast('Reloading latest app version...');
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (const r of regs) await r.unregister();
+          }
+          if ('caches' in window) {
+            const keys = await caches.keys();
+            for (const k of keys) await caches.delete(k);
+          }
+        } catch (e) {}
+        window.location.reload();
+      });
+    }
+
+    // Native Android Hardware Back Button / Back Swipe Gesture Handler (`popstate`)
+    try {
+      history.replaceState({ wlView: 'root_home' }, '');
+    } catch (e) {}
+    window.addEventListener('popstate', () => {
+      if (!isAppUnlocked) return;
+      isHandlingPopState = true;
+      try {
+        const modalEl = document.getElementById('modalBackdrop');
+        if (modalEl && !modalEl.classList.contains('hidden')) {
+          closeModal();
+          return;
+        }
+        const sideEl = document.getElementById('profileSidebarBackdrop');
+        if (sideEl && !sideEl.classList.contains('hidden')) {
+          closeProfileSidebar();
+          return;
+        }
+        const mfDet = document.getElementById('mfDetailScreenView');
+        if (mfDet && !mfDet.classList.contains('hidden')) {
+          backToMfDashboard();
+          return;
+        }
+        const npsDet = document.getElementById('npsDetailScreenView');
+        if (npsDet && !npsDet.classList.contains('hidden')) {
+          backToNpsDashboard();
+          return;
+        }
+        if (activeTab !== 'overview') {
+          switchTab('overview', true);
+          return;
+        }
+      } finally {
+        isHandlingPopState = false;
+      }
+    });
+
+    // Native Mobile Pull-to-Refresh Gesture on `#appMainScroll`
+    (function initPullToRefresh() {
+      const scrollEl = document.getElementById('appMainScroll');
+      const ptrBar = document.getElementById('pullToRefreshBar');
+      const ptrText = document.getElementById('ptrStatusText');
+      if (!scrollEl || !ptrBar) return;
+      let startY = 0;
+      let pulling = false;
+      let triggered = false;
+
+      scrollEl.addEventListener('touchstart', (e) => {
+        if (scrollEl.scrollTop <= 2 && e.touches && e.touches.length === 1) {
+          startY = e.touches[0].clientY;
+          pulling = true;
+          triggered = false;
+        } else {
+          pulling = false;
+        }
+      }, { passive: true });
+
+      scrollEl.addEventListener('touchmove', (e) => {
+        if (!pulling || scrollEl.scrollTop > 2) return;
+        const dy = e.touches[0].clientY - startY;
+        if (dy > 28) {
+          ptrBar.classList.remove('hidden');
+          if (dy > 85) {
+            if (!triggered) triggerHaptic(12);
+            triggered = true;
+            if (ptrText) ptrText.textContent = 'Release to refresh live NAVs...';
+          } else {
+            triggered = false;
+            if (ptrText) ptrText.textContent = 'Pull down to refresh...';
+          }
+        }
+      }, { passive: true });
+
+      scrollEl.addEventListener('touchend', async () => {
+        if (!pulling) return;
+        pulling = false;
+        if (triggered) {
+          if (ptrText) ptrText.textContent = 'Refreshing live NAVs & market data...';
+          await syncLiveNavs();
+          setTimeout(() => { ptrBar.classList.add('hidden'); }, 350);
+        } else {
+          ptrBar.classList.add('hidden');
+        }
+        triggered = false;
+      }, { passive: true });
+    })();
+
     function openSettingsModal() {
       openProfileSidebar();
     }
@@ -1637,6 +1757,7 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
       const stVal = Math.max(0, val - ltVal);
 
       // Switch to Full-Screen Investment Details View (Groww style screenshots 1000214957.png & 1000214958.png)
+      pushNavState('detail_mf');
       document.getElementById('mfDashboardSubView').classList.add('hidden');
       const screenEl = document.getElementById('mfDetailScreenView');
       screenEl.classList.remove('hidden');
@@ -2024,14 +2145,15 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
         // Always store exact net invested (units * nav, or stamp-duty-adjusted amount)
         const netInvested = (Math.abs(trueUnits * nav - amt) <= 25) ? +(trueUnits * nav).toFixed(2) : amt;
 
-        const rawName = String(item.schemeName || '').toLowerCase();
+        const cleanedSchemeTitle = String(item.schemeName || '')
+          .replace(/\s+(?:SIP\s*AMOUNT|INVESTMENT\s*AMOUNT|SIP|AMOUNT|FOLIO.*)$/i, '')
+          .trim();
+        const rawName = cleanedSchemeTitle.toLowerCase();
         let fund = state.mutualFunds.find(f => {
           const firstWords = f.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').trim().split(/\s+/).slice(0, 2).join(' ');
           return firstWords && rawName.includes(firstWords);
         });
         if (!fund) {
-          // Fallback matching when an older script version returned the email subject as schemeName:
-          // Check amount first (8000 / 7999.60 = HDFC Mid Cap, 15000 / 14999.25 = Parag Parikh, 7000 / 6999.65 = UTI Nifty 50, 300000 / 299984.98 or NAV 30-60 = Kotak Arbitrage)
           if (nav >= 30 && nav < 60) {
             fund = state.mutualFunds.find(f => f.schemeCode === '119771' || /kotak/i.test(f.name));
           } else if (Math.abs(amt - 8000) < 50 || nav >= 180) {
@@ -2041,6 +2163,29 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
           } else if (Math.abs(amt - 7000) < 50 || (nav >= 130 && nav < 180)) {
             fund = state.mutualFunds.find(f => f.schemeCode === '120716' || /uti/i.test(f.name));
           }
+        }
+        if (!fund && cleanedSchemeTitle && !/allocated|allotted|subject/i.test(cleanedSchemeTitle)) {
+          // Auto-create the Mutual Fund holding dynamically if it was not imported yet!
+          let autoCode = '000000';
+          let autoCat = 'Equity';
+          if (/kotak.*arbitrage/i.test(cleanedSchemeTitle)) { autoCode = '119771'; autoCat = 'Arbitrage'; }
+          else if (/hdfc.*mid\s*cap/i.test(cleanedSchemeTitle)) { autoCode = '118989'; autoCat = 'Mid Cap'; }
+          else if (/parag\s*parikh.*flexi/i.test(cleanedSchemeTitle)) { autoCode = '122639'; autoCat = 'Flexi Cap'; }
+          else if (/uti.*nifty\s*50/i.test(cleanedSchemeTitle)) { autoCode = '120716'; autoCat = 'Large Cap'; }
+          fund = {
+            id: 'mf_gmail_auto_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+            name: cleanedSchemeTitle,
+            schemeCode: autoCode,
+            folio: '',
+            category: autoCat,
+            units: 0,
+            invested: 0,
+            currentNav: nav,
+            prevNav: nav,
+            monthlySip: Math.round(amt),
+            installments: []
+          };
+          state.mutualFunds.push(fund);
         }
         if (!fund) return;
         if (!Array.isArray(fund.installments)) fund.installments = [];
@@ -2288,38 +2433,155 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
       document.getElementById('btnRunGmailSyncNow').addEventListener('click', async () => {
         const statusEl = document.getElementById('gmailSyncStatus');
         statusEl.classList.remove('hidden');
+        const url = (document.getElementById('gmailWebhookInput').value || '').trim();
+        if (url) {
+          state.gmailWebhookUrl = url;
+          localStorage.setItem('wl_gas_bridge_url', url);
+          saveState();
+        }
+        await runBackgroundGmailSyncOnPage(url, statusEl);
+      });
+    }
 
-        // 1. If hosted directly inside Google Apps Script ("Only myself"), use internal google.script.run RPC
-        if (typeof window.google !== 'undefined' && window.google.script && window.google.script.run) {
-          statusEl.innerHTML = '<span class="text-slate-300">Running authenticated internal RPC (google.script.run)...</span>';
+    // 100% Background Same-Page Gmail Sync (Zero new tabs opened!)
+    // Tries: 1) Internal google.script.run -> 2) Background CORS fetch(?mode=json) -> 3) Background JSONP <script>(?mode=jsonp) -> 4) Hidden 0x0 <iframe> postMessage
+    async function runBackgroundGmailSyncOnPage(customUrl, statusEl) {
+      const setStatus = (htmlMsg) => {
+        if (statusEl) {
+          statusEl.classList.remove('hidden');
+          statusEl.innerHTML = htmlMsg;
+        }
+      };
+
+      const isHostedInGas = typeof window.google !== 'undefined' && window.google.script && window.google.script.run;
+      if (isHostedInGas) {
+        showAppLoader('Syncing Gmail Inbox...', 'Scanning your Gmail privately in the background', 45);
+        setStatus('<span class="text-slate-300">Syncing Gmail in background via Google Apps Script...</span>');
+        await new Promise((resolve) => {
           window.google.script.run
             .withSuccessHandler(async (data) => {
               const items = Array.isArray(data && data.items) ? data.items : [];
               const npsItems = Array.isArray(data && data.npsItems) ? data.npsItems : [];
               const newMf = ingestGmailItems(items);
               const newNps = await ingestNpsGmailItems(npsItems);
-              statusEl.innerHTML = `<span class="text-emerald-400">✓ Internal RPC Sync Complete! MF: ${items.length} (+${newMf} new) • NPS: ${npsItems.length} (+${newNps} new).</span>`;
+              await syncLiveNavs();
+              setStatus(`<span class="text-emerald-400">✓ Background Gmail Sync Complete! MF: ${items.length} scanned (+${newMf} new) • NPS: ${npsItems.length} scanned (+${newNps} new).</span>`);
+              showToast(`✓ Gmail Synced! MF: +${newMf} new • NPS: +${newNps} new`);
+              resolve();
             })
             .withFailureHandler((err) => {
-              statusEl.innerHTML = `<span class="text-rose-400">Auth error: ${err.message}</span>`;
+              setStatus(`<span class="text-rose-400">Gmail auth error: ${err && err.message ? err.message : 'Check permissions'}</span>`);
+              showToast('Gmail sync failed — check script permissions');
+              resolve();
             })
             .syncGmailPortfolio();
-          return;
-        }
+        });
+        hideAppLoader();
+        return;
+      }
 
-        // 2. Otherwise open the authenticated top-level popup bridge (?mode=bridge) so "Only myself" works from local file
-        const url = document.getElementById('gmailWebhookInput').value.trim();
-        if (!url) {
-          statusEl.innerHTML = '<span class="text-amber-300">Paste your Google Apps Script Web App URL above first.</span>';
-          return;
+      const bridgeUrl = (customUrl || state.gmailWebhookUrl || localStorage.getItem('wl_gas_bridge_url') || '').trim();
+      if (!bridgeUrl || !bridgeUrl.startsWith('https://script.google.com/')) {
+        hideAppLoader();
+        openGmailSyncModal();
+        return;
+      }
+
+      showAppLoader('Syncing Gmail in Background...', 'Verifying Google session & fetching SIP/NPS allotments without leaving this page', 45);
+      setStatus('<span class="text-emerald-300">⟳ Syncing in background... Verifying Google login & scanning inbox...</span>');
+
+      const sep = bridgeUrl.includes('?') ? '&' : '?';
+      const authHash = (secConfig && secConfig.adminPinHash) ? secConfig.adminPinHash : '';
+      let payloadData = null;
+
+      // Attempt 1: Direct Background CORS Fetch (`?mode=json`)
+      try {
+        const fRes = await fetch(`${bridgeUrl}${sep}mode=json&authHash=${encodeURIComponent(authHash)}&_t=${Date.now()}`, {
+          method: 'GET',
+          credentials: 'omit',
+          redirect: 'follow'
+        });
+        if (fRes.ok) {
+          const txt = await fRes.text();
+          if (txt && txt.trim().startsWith('{')) {
+            payloadData = JSON.parse(txt);
+          }
         }
-        state.gmailWebhookUrl = url;
-        saveState();
-        const sep = url.includes('?') ? '&' : '?';
-        const bridgeUrl = `${url}${sep}mode=bridge&_t=${Date.now()}`;
-        statusEl.innerHTML = '<span class="text-emerald-300">Opened Google Account verification tab. Once verified, it will auto-sync back here (or tap "Copy Verified Sync Data" and paste below).</span>';
-        window.open(bridgeUrl, '_blank');
-      });
+      } catch (e) {}
+
+      // Attempt 2: Silent Background JSONP `<script>` Injection (`?mode=jsonp`) — Bypasses XHR CORS!
+      if (!payloadData) {
+        payloadData = await new Promise((resolve) => {
+          const cbName = '__wlGmailJsonp_' + Date.now();
+          const scriptEl = document.createElement('script');
+          const timer = setTimeout(() => {
+            cleanup();
+            resolve(null);
+          }, 7500);
+          function cleanup() {
+            clearTimeout(timer);
+            try { delete window[cbName]; } catch (e) {}
+            if (scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
+          }
+          window[cbName] = (data) => {
+            cleanup();
+            resolve(data || null);
+          };
+          scriptEl.onerror = () => {
+            cleanup();
+            resolve(null);
+          };
+          scriptEl.src = `${bridgeUrl}${sep}mode=jsonp&callback=${cbName}&authHash=${encodeURIComponent(authHash)}&_t=${Date.now()}`;
+          document.head.appendChild(scriptEl);
+        });
+      }
+
+      // Attempt 3: Hidden 0x0 Background `<iframe>` (`?mode=bridge`) with `window.top.postMessage` (Works with "Only myself" when browser allows 3P cookies)
+      if (!payloadData) {
+        payloadData = await new Promise((resolve) => {
+          const iframeEl = document.createElement('iframe');
+          iframeEl.style.cssText = 'position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;z-index:-1;';
+          const timer = setTimeout(() => {
+            cleanup();
+            resolve(null);
+          }, 4500);
+          function onMsg(ev) {
+            if (ev.data && ev.data.type === 'WEALTHLOCAL_GMAIL_SYNC' && ev.data.payload) {
+              cleanup();
+              resolve(ev.data.payload);
+            }
+          }
+          function cleanup() {
+            clearTimeout(timer);
+            window.removeEventListener('message', onMsg);
+            if (iframeEl.parentNode) iframeEl.parentNode.removeChild(iframeEl);
+          }
+          window.addEventListener('message', onMsg);
+          iframeEl.src = `${bridgeUrl}${sep}mode=bridge&_t=${Date.now()}`;
+          document.body.appendChild(iframeEl);
+        });
+      }
+
+      if (payloadData && payloadData.status === 'ok') {
+        const items = Array.isArray(payloadData.items) ? payloadData.items : [];
+        const npsItems = Array.isArray(payloadData.npsItems) ? payloadData.npsItems : [];
+        const newMf = ingestGmailItems(items);
+        const newNps = await ingestNpsGmailItems(npsItems);
+        showAppLoader('Updating Live NAVs...', 'Resolving latest AMFI & NPS prices for synced holdings', 85);
+        await syncLiveNavs();
+        hideAppLoader();
+        setStatus(`<span class="text-emerald-400">✓ Background Gmail Sync Complete! Scanned ${items.length} MF email(s) (+${newMf} new) &amp; ${npsItems.length} NPS email(s) (+${newNps} new).</span>`);
+        showToast(`✓ Gmail Synced! MF: +${newMf} new • NPS: +${newNps} new`);
+        return;
+      }
+
+      // Attempt 4: Seamless Same-Tab Auto-Return Redirect (`Only myself` First-Party Cookie Verification)
+      // When "Who has access: Only myself" is enabled and mobile Chrome blocks 3P cookies inside hidden iframes,
+      // navigate in the same tab with `&returnUrl=...` so Google verifies your first-party login cookie and immediately bounces back with `#wl_gmail_sync=<base64>`!
+      showAppLoader('Verifying Google Session ("Only myself")...', 'Completing authenticated Gmail sync & returning automatically...', 75);
+      const cleanReturnUrl = window.location.href.split('#')[0];
+      saveActiveSession(currentUserRole, currentUserName);
+      window.location.href = `${bridgeUrl}${sep}mode=bridge&returnUrl=${encodeURIComponent(cleanReturnUrl)}&_t=${Date.now()}`;
     }
 
     async function triggerOneClickGmailSync() {
@@ -2327,40 +2589,7 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
         showToast('Gmail Sync is restricted to Admin');
         return;
       }
-      const isHostedInGas = typeof window.google !== 'undefined' && window.google.script && window.google.script.run;
-      if (!isHostedInGas) {
-        const bridgeUrl = (state.gmailWebhookUrl || localStorage.getItem('wl_gas_bridge_url') || '').trim();
-        if (bridgeUrl && bridgeUrl.startsWith('https://script.google.com/')) {
-          const sep = bridgeUrl.includes('?') ? '&' : '?';
-          window.open(bridgeUrl + sep + 'mode=bridge', '_blank', 'width=520,height=620');
-          showToast('Opened authenticated Google Apps Script sync bridge...');
-          return;
-        }
-        openGmailSyncModal();
-        return;
-      }
-      showAppLoader('Syncing Gmail Inbox...', 'Scanning for Mutual Fund SIP & NPS contribution emails', 50);
-      await new Promise((resolve) => {
-        window.google.script.run
-          .withSuccessHandler(async (data) => {
-            try {
-              const items = Array.isArray(data && data.items) ? data.items : [];
-              const npsItems = Array.isArray(data && data.npsItems) ? data.npsItems : [];
-              const newMf = ingestGmailItems(items);
-              const newNps = await ingestNpsGmailItems(npsItems);
-              showToast(`Gmail Sync Complete! MF: +${newMf} new (${items.length} scanned) • NPS: +${newNps} new`);
-            } catch (e) {
-              showToast('Error processing Gmail sync data');
-            }
-            resolve();
-          })
-          .withFailureHandler((err) => {
-            showToast('Gmail sync failed: ' + (err && err.message ? err.message : 'Check permissions'));
-            resolve();
-          })
-          .syncGmailPortfolio();
-      });
-      hideAppLoader();
+      await runBackgroundGmailSyncOnPage();
     }
 
     document.getElementById('btnSyncGmail').addEventListener('click', triggerOneClickGmailSync);
@@ -2384,6 +2613,7 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
       const dayChange = npsItem.units * (npsItem.currentNav - npsItem.prevNav);
       const avgBuyNav = npsItem.units > 0 ? (npsItem.invested / npsItem.units) : 0;
 
+      pushNavState('detail_nps');
       document.getElementById('npsDashboardSubView').classList.add('hidden');
       const screenEl = document.getElementById('npsDetailScreenView');
       screenEl.classList.remove('hidden');
@@ -2707,13 +2937,40 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
       syncLiveMarketIndices();
     }
 
+    // Check if returning from automatic "Only myself" Gmail Sync bounce (`#wl_gmail_sync=<base64>`)
+    async function checkIncomingGmailSyncHash() {
+      try {
+        const h = String(window.location.hash || '');
+        if (!h.includes('wl_gmail_sync=')) return;
+        const b64 = decodeURIComponent(h.split('wl_gmail_sync=')[1].split('&')[0]);
+        // Clear hash immediately from address bar
+        try {
+          history.replaceState({ wlView: 'root_home' }, '', window.location.pathname + window.location.search);
+        } catch (e) {}
+        const jsonStr = decodeURIComponent(escape(atob(b64)));
+        const data = JSON.parse(jsonStr);
+        if (data && data.status === 'ok') {
+          showAppLoader('Applying Gmail Sync Data...', 'Updating Mutual Funds & NPS holdings from verified Google session', 65);
+          const items = Array.isArray(data.items) ? data.items : [];
+          const npsItems = Array.isArray(data.npsItems) ? data.npsItems : [];
+          const newMf = ingestGmailItems(items);
+          const newNps = await ingestNpsGmailItems(npsItems);
+          await syncLiveNavs();
+          hideAppLoader();
+          showToast(`✓ Gmail Sync Complete! MF: +${newMf} new (${items.length} emails) • NPS: +${newNps} new`);
+        }
+      } catch (err) {
+        hideAppLoader();
+      }
+    }
+
     // Init: Restore active session ONLY if within sessionTimeoutMinutes; otherwise keep #mainAppShell hidden & unrendered!
     if (isSessionStillValid()) {
       isAppUnlocked = true;
       const sess = loadActiveSession();
       currentUserRole = (sess && sess.role) || 'admin';
       currentUserName = (sess && sess.name) || (secConfig.adminName || 'Admin');
-      decryptStoredVaultIntoState().then(() => {
+      decryptStoredVaultIntoState().then(async () => {
         const shell = document.getElementById('mainAppShell');
         if (shell) shell.classList.remove('hidden');
         document.getElementById('appLockScreen').classList.add('hidden');
@@ -2721,6 +2978,7 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
         applyRolePermissions();
         switchTab('overview');
         renderAll();
+        await checkIncomingGmailSyncHash();
       });
     } else {
       isAppUnlocked = false;
