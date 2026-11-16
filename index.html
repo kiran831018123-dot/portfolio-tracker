@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#090d16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Portfolio Tracker — Private Wealth Vault</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+          colors: {
+            surface: {
+              950: '#070b14',
+              900: '#0f1624',
+              800: '#172033',
+              700: '#222e46'
+            }
+          }
+        }
+      }
+    };
+  </script>
+    <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="h-[100dvh] w-full m-0 p-0 overflow-hidden antialiased selection:bg-emerald-500/30 flex justify-center bg-surface-950">
+
+  <!-- NATIVE APP ACTIVITY & PROGRESS OVERLAY -->
+  <div id="appLoadingOverlay" class="hidden fixed inset-0 z-[120] bg-black/75 backdrop-blur-md flex items-center justify-center p-6">
+    <div class="w-full max-w-xs rounded-3xl bg-surface-900 border border-slate-800 p-5 shadow-2xl text-center space-y-3.5">
+      <div class="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto">
+        <svg class="w-6 h-6 text-emerald-400 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+          <path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+      <div>
+        <h3 id="loadingTitle" class="text-sm font-extrabold text-white">Syncing Portfolio...</h3>
+        <p id="loadingSubtitle" class="text-[11px] text-slate-400 mt-1">Fetching live NAVs &amp; market indices</p>
+      </div>
+      <div class="w-full h-1.5 rounded-full bg-surface-800 overflow-hidden">
+        <div id="loadingProgressBar" class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300" style="width: 35%"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTHENTICATION GATE: 100% FULL-VIEWPORT OPAQUE LOCK SCREEN (Zero Background Bleed, DOM Unrendered Until Unlocked) -->
+  <div id="appLockScreen" class="fixed inset-0 w-screen h-[100dvh] max-w-none z-[100] bg-[#070b14] overflow-y-auto no-scrollbar flex justify-center">
+    <div class="w-full max-w-md min-h-[100dvh] flex flex-col justify-between py-5 px-5 mx-auto">
+    <!-- Top Status & 1-Tap Copy Bar -->
+    <div class="w-full flex items-center justify-between text-xs text-slate-400 shrink-0">
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-900 border border-slate-800 text-emerald-400 font-semibold">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+        <span id="vaultSyncStatusBadge">AES-256 Vault</span>
+      </span>
+      <div class="flex items-center gap-2">
+        <button id="btnLockToggleTheme" type="button" title="Switch Light / Dark Theme" class="px-2.5 py-1 rounded-full bg-surface-900 border border-slate-800 text-[11px] font-bold text-slate-300 hover:text-emerald-400 flex items-center gap-1 transition active:scale-95">
+          <span class="theme-toggle-icon">☀️</span>
+          <span class="theme-toggle-label">Light</span>
+        </button>
+        <span id="lockModeBadge" class="text-[11px] text-slate-400 font-semibold">v17.0</span>
+      </div>
+    </div>
+
+    <!-- Top Mode Switcher: Login vs Register New User (Shown once primary Admin exists) -->
+    <div id="authTopModeSwitcher" class="hidden grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-surface-900 border border-slate-800 w-full max-w-xs mx-auto mt-3 text-xs font-bold shrink-0">
+      <button type="button" id="btnAuthTabLogin" class="py-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 transition">
+        🔑 Login
+      </button>
+      <button type="button" id="btnAuthTabRegister" class="py-2 rounded-xl text-slate-400 hover:text-white transition">
+        ➕ Register User
+      </button>
+    </div>
+
+    <!-- VIEW A: REGISTRATION PANEL (Initial Owner Setup OR Admin-Authorized New User Registration) -->
+    <div id="lockRegisterPanel" class="hidden my-auto w-full space-y-3 py-2">
+      <div class="text-center">
+        <h2 id="regPanelTitle" class="text-lg font-extrabold text-white">Create Primary Admin Account</h2>
+        <p id="regPanelSubtitle" class="text-[11px] text-slate-400 mt-0.5">One-time owner setup. Once created, only an Admin can register new users.</p>
+      </div>
+
+      <div class="rounded-2xl bg-surface-900 border border-slate-800 p-3.5 space-y-2.5 text-xs">
+        <!-- Admin Authorization Box (Shown ONLY when an Admin already exists!) -->
+        <div id="existingAdminAuthBox" class="hidden rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[10px] uppercase font-extrabold text-amber-300">🔒 Admin Authorization Required</span>
+            <span class="text-[10px] text-slate-400">Protected</span>
+          </div>
+          <p class="text-[11px] text-slate-300 leading-snug">Because the primary Admin is already registered, enter an <strong>existing Admin's 6-digit PIN</strong> (or Master Recovery Key) to authorize creating this account:</p>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">New User Role</label>
+              <select id="regNewUserRole" class="w-full px-2.5 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white font-bold">
+                <option value="viewer">👁️ Read-Only Viewer</option>
+                <option value="admin">👑 Co-Admin (Full Access)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[10px] uppercase font-bold text-amber-400 mb-1">Existing Admin PIN *</label>
+              <input id="regAuthExistingAdminPin" type="password" placeholder="Admin PIN / Key" class="w-full px-2.5 py-2 rounded-xl bg-surface-800 border border-amber-500/50 text-white font-bold text-center" />
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Full Name *</label>
+            <input id="regAdminName" type="text" value="" placeholder="e.g. Kiran Kumar" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white font-semibold" />
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-emerald-400 mb-1">6-Digit Login PIN *</label>
+            <input id="regAdminPin" type="password" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-emerald-500/50 text-white font-bold tracking-widest text-center" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Mobile Number</label>
+            <input id="regAdminMobile" type="tel" placeholder="+91 98765..." class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Email ID</label>
+            <input id="regAdminEmail" type="email" placeholder="you@gmail.com" class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+          </div>
+        </div>
+
+        <!-- Optional Read-Only Viewer quick-setup (shown only on initial Primary Admin creation) -->
+        <div id="initialViewerQuickBox" class="pt-2 border-t border-slate-800/80 grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Optional Viewer Name</label>
+            <input id="regViewerName" type="text" value="Family Viewer" placeholder="Optional Viewer" class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase font-bold text-sky-400 mb-1">Viewer 6-Digit PIN</label>
+            <input id="regViewerPin" type="password" inputmode="numeric" maxlength="6" placeholder="Optional 6 digits" class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white font-bold tracking-widest text-center" />
+          </div>
+        </div>
+
+        <!-- Security Questions (Required for Admin accounts) -->
+        <div id="regSecurityQuestionsBox" class="pt-2 border-t border-slate-800/80 space-y-2">
+          <p class="text-[10px] uppercase font-bold text-amber-400">PIN Recovery Security Questions</p>
+          <select id="regSecQ1" class="w-full px-2.5 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-slate-200 text-[11px]">
+            <option value="What was the registration number or model of your first vehicle?">Q1: Model or reg. number of your first vehicle?</option>
+            <option value="In which city did you start your first software job?">Q1: City where you started your first job?</option>
+            <option value="What is your childhood nickname or school name?">Q1: Childhood nickname or first school name?</option>
+          </select>
+          <input id="regSecA1" type="text" placeholder="Answer 1 (case-insensitive)" class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+
+          <select id="regSecQ2" class="w-full px-2.5 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-slate-200 text-[11px]">
+            <option value="What is the name of your hometown or family village?">Q2: Name of your hometown or family village?</option>
+            <option value="What is your favorite sci-fi movie or series?">Q2: Favorite sci-fi movie or series?</option>
+            <option value="What was your college major or favorite subject?">Q2: College branch or favorite subject?</option>
+          </select>
+          <input id="regSecA2" type="text" placeholder="Answer 2 (case-insensitive)" class="w-full px-3 py-1.5 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+        </div>
+
+        <p id="regErrorMsg" class="text-[11px] font-semibold text-rose-400 min-h-[16px]"></p>
+        <button type="button" id="btnCompleteRegistration" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/25 transition active:scale-95">
+          Complete Registration &amp; Login
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW B: LOGIN KEYPAD PANEL -->
+    <div id="lockKeypadPanel" class="flex flex-col items-center text-center my-auto w-full max-w-xs mx-auto">
+      <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl shadow-emerald-500/20 mb-2.5">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8m0 0h-5m5 0v5"/>
+        </svg>
+      </div>
+      <h2 id="lockTitle" class="text-lg font-extrabold text-white tracking-tight">Who's Logging In?</h2>
+      <p id="lockSubtitle" class="text-[11px] text-slate-400 mt-0.5">Tap your profile avatar below &amp; enter your 6-digit PIN</p>
+
+      <!-- Option A: Interactive Profile Avatar Picker on Lock Screen (Unique User ID per Profile) -->
+      <div id="lockProfilePickerList" class="flex items-center justify-center gap-2.5 flex-wrap w-full mt-3 px-1"></div>
+
+      <!-- Hidden legacy buttons preserved for listener safety -->
+      <button type="button" id="btnLockSelectAdmin" class="hidden"><span id="lockAdminNameLabel"></span></button>
+      <button type="button" id="btnLockSelectViewer" class="hidden"><span id="lockViewerNameLabel"></span></button>
+
+      <!-- 6 PIN Dots (Strict 6-Digit PIN Security) -->
+      <div id="pinDotsContainer" class="flex items-center justify-center gap-3 my-4">
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+        <span class="pin-dot w-3.5 h-3.5 rounded-full border-2 border-slate-600 transition-all duration-150"></span>
+      </div>
+
+      <p id="lockErrorMsg" class="text-xs font-semibold text-rose-400 h-4 mb-1"></p>
+
+      <!-- Numeric Keypad -->
+      <div class="grid grid-cols-3 gap-2.5 w-full max-w-[245px]">
+        <button type="button" data-pin-key="1" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">1</button>
+        <button type="button" data-pin-key="2" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">2</button>
+        <button type="button" data-pin-key="3" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">3</button>
+        <button type="button" data-pin-key="4" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">4</button>
+        <button type="button" data-pin-key="5" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">5</button>
+        <button type="button" data-pin-key="6" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">6</button>
+        <button type="button" data-pin-key="7" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">7</button>
+        <button type="button" data-pin-key="8" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">8</button>
+        <button type="button" data-pin-key="9" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">9</button>
+        <button type="button" id="btnBiometricUnlock" title="Clear / Biometric" class="py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 flex items-center justify-center text-xs font-bold text-slate-400 transition">
+          <span id="keypadLeftActionLabel">CLR</span>
+        </button>
+        <button type="button" data-pin-key="0" class="pin-key py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 text-lg font-bold text-white transition">0</button>
+        <button type="button" id="btnPinBackspace" aria-label="Backspace" class="py-3 rounded-2xl bg-surface-900 hover:bg-surface-800 active:scale-95 border border-slate-800/90 flex items-center justify-center text-slate-300 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 12l6.414 6.414a2 2 0 001.414.586H19a2 2 0 002-2V7a2 2 0 00-2-2h-8.172a2 2 0 00-1.414.586L3 12z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- VIEW C: FORGOT PIN / SECURITY QUESTIONS RECOVERY -->
+    <div id="lockRecoveryPanel" class="hidden my-auto w-full space-y-3 py-3">
+      <div class="text-center">
+        <h2 class="text-base font-extrabold text-white">Admin PIN Recovery</h2>
+        <p class="text-[11px] text-slate-400">Answer both security questions (or enter Master Recovery Key) to reset Admin PIN</p>
+      </div>
+      <div class="rounded-2xl bg-surface-900 border border-slate-800 p-4 space-y-3 text-xs">
+        <div>
+          <p id="recQ1Text" class="text-slate-300 font-semibold mb-1">Question 1</p>
+          <input id="recA1Input" type="text" placeholder="Your Answer 1 (or Master Recovery Key)" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+        </div>
+        <div>
+          <p id="recQ2Text" class="text-slate-300 font-semibold mb-1">Question 2</p>
+          <input id="recA2Input" type="text" placeholder="Your Answer 2" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+        </div>
+        <div>
+          <label class="block text-emerald-400 font-bold mb-1">New 6-Digit Admin PIN</label>
+          <input id="recNewAdminPin" type="password" inputmode="numeric" maxlength="6" placeholder="Enter new 6-digit PIN" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-emerald-500/50 text-white font-bold text-center tracking-widest" />
+        </div>
+        <p id="recErrorMsg" class="text-[11px] font-semibold text-rose-400 min-h-[16px]"></p>
+        <div class="flex gap-2">
+          <button type="button" id="btnCancelRecovery" class="flex-1 py-2 rounded-xl bg-surface-800 text-slate-300 font-semibold">Back to Login</button>
+          <button type="button" id="btnVerifyAndResetPin" class="flex-1 py-2 rounded-xl bg-emerald-600 text-white font-bold">Verify &amp; Reset PIN</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Lock Bar: Biometric Prompt & Forgot PIN link -->
+    <div id="lockBottomBar" class="w-full flex flex-col items-center gap-1.5 shrink-0">
+      <button type="button" id="btnTriggerBiometricPrompt" class="inline-flex items-center gap-2 px-4 py-1.5 rounded-xl bg-surface-900 hover:bg-surface-800 border border-slate-800 text-xs font-semibold text-emerald-400 transition active:scale-95">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4"/></svg>
+        <span id="bioBtnLabel">Biometric Admin Login</span>
+      </button>
+      <button type="button" id="btnOpenForgotPin" class="text-[11px] text-slate-400 hover:text-emerald-400 underline">
+        Forgot Admin PIN? Reset with Security Questions
+      </button>
+    </div>
+    </div>
+  </div>
+
+  <!-- RESPONSIVE NATIVE APP SHELL (Starts strictly `hidden` and unrendered while `isAppUnlocked === false` so DevTools / resizing can NEVER expose data!) -->
+  <div id="mainAppShell" class="hidden w-full max-w-none md:max-w-4xl lg:max-w-5xl h-[100dvh] flex flex-col bg-surface-950 border-0 md:border-x border-slate-900/80 relative overflow-hidden shadow-2xl m-0 p-0">
+  <!-- Ultra-Clean Groww-Style Top Bar: Brand Title on Left, Only Refresh & Profile Avatar on Right -->
+  <header id="mainAppHeader" class="shrink-0 z-30 bg-surface-950/95 backdrop-blur-md border-b border-slate-800/70 px-3 sm:px-4 md:px-6 py-3 flex items-center justify-between gap-3">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 shrink-0 rounded-full bg-gradient-to-br from-emerald-400 via-teal-500 to-sky-600 p-0.5 shadow-md shadow-emerald-500/15">
+        <div class="w-full h-full rounded-full bg-surface-950 flex items-center justify-center">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 17l6-6 4 4 8-8m0 0h-5m5 0v5"/>
+          </svg>
+        </div>
+      </div>
+      <div>
+        <h1 id="topHeaderScreenTitle" class="text-base font-extrabold tracking-tight text-white leading-none">Portfolio Tracker</h1>
+        <p id="lastSyncBadge" class="text-[10px] text-slate-400 font-medium mt-1">Private Wealth Vault</p>
+      </div>
+    </div>
+
+    <!-- Desktop Center Navigation Pills (Hidden on Mobile, Shown on Tablet/Desktop) -->
+    <nav class="hidden md:flex items-center gap-1 bg-surface-900 p-1 rounded-2xl border border-slate-800">
+      <button data-tab="overview" class="nav-tab px-4 py-1.5 rounded-xl text-xs font-bold transition">Explore</button>
+      <button data-tab="mf" class="nav-tab px-4 py-1.5 rounded-xl text-xs font-bold transition">Mutual Funds</button>
+      <button data-tab="nps" class="nav-tab px-4 py-1.5 rounded-xl text-xs font-bold transition">NPS</button>
+      <button data-tab="retiral" class="nav-tab px-4 py-1.5 rounded-xl text-xs font-bold transition">EPF &amp; PPF</button>
+    </nav>
+
+    <!-- Minimalist Right Icons: Theme Toggle + Gmail Sync Icon + Live NAV Sync Icon + Perfectly Aligned Profile Avatar Circle -->
+    <div class="flex items-center gap-2 shrink-0">
+      <button id="btnToggleTheme" type="button" title="Toggle Dark / Light Theme" class="w-9 h-9 shrink-0 rounded-full bg-surface-900 hover:bg-surface-800 border border-slate-800/90 flex items-center justify-center text-amber-400 hover:text-amber-300 transition active:scale-95">
+        <span class="theme-toggle-icon text-sm leading-none">☀️</span>
+      </button>
+      <button id="btnSyncGmail" type="button" title="Sync Gmail SIP & NPS Allotments" class="w-9 h-9 shrink-0 rounded-full bg-surface-900 hover:bg-surface-800 border border-slate-800/90 flex items-center justify-center text-emerald-400 hover:text-emerald-300 transition active:scale-95">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+      </button>
+      <button id="btnRefreshNav" type="button" title="Refresh Live NAVs & Market Indices" class="w-9 h-9 shrink-0 rounded-full bg-surface-900 hover:bg-surface-800 border border-slate-800/90 flex items-center justify-center text-slate-300 hover:text-emerald-400 transition active:scale-95">
+        <svg id="refreshIcon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+      </button>
+      <button id="btnOpenSettings" type="button" title="Open Profile & Settings Sidebar" class="w-9 h-9 shrink-0 rounded-full p-0.5 bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center active:scale-95 transition shadow-md shadow-emerald-500/15">
+        <span id="headerAvatarCircle" class="w-full h-full rounded-full bg-surface-900 flex items-center justify-center text-[11px] font-extrabold text-white leading-none select-none">KK</span>
+      </button>
+      <span id="headerUserName" class="hidden">Admin</span>
+      <span id="activeRoleBadge" class="hidden">Admin</span>
+    </div>
+  </header>
+
+  <!-- Scrollable Native App Viewport -->
+  <main id="appMainScroll" class="flex-1 overflow-y-auto no-scrollbar px-2.5 sm:px-4 md:px-6 pt-3.5 pb-24 md:pb-10 space-y-4">
+
+    <!-- Empty-State Quick Start Banner -->
+    <div id="emptyStartBanner" class="hidden rounded-2xl bg-emerald-500/10 border border-emerald-500/30 p-3.5 space-y-2">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 class="text-xs font-bold text-emerald-300">Clean Slate Ready</h2>
+          <p class="text-[11px] text-slate-300 mt-0.5">Import your Groww, Protean NPS, EPFO, or PPF statements, or restore a JSON backup from Settings.</p>
+        </div>
+        <button id="btnOpenGuideFromBanner" type="button" class="shrink-0 px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold transition">Guide</button>
+      </div>
+    </div>
+
+    <!-- TAB: OVERVIEW (Rich Wealth Intelligence Dashboard) -->
+    <section id="tab-overview" class="tab-panel space-y-3.5">
+      <!-- Premium Net Worth Hero Card with Stacked Asset Allocation Bar -->
+      <div class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#0f1c2e] via-surface-900 to-[#0a231e] border border-emerald-500/25 p-5 shadow-2xl">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span class="text-[11px] font-bold uppercase tracking-widest text-emerald-300/90">Total Net Worth</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span id="heroDayPill" class="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-surface-950/70 border border-slate-700/80 text-slate-300">1D: ₹0</span>
+            <button id="btnTogglePrivacy" type="button" title="Hide / Show Balances" class="w-7 h-7 rounded-full bg-surface-950/70 hover:bg-surface-800 border border-slate-700 flex items-center justify-center text-slate-300 transition active:scale-95">
+              <svg id="eyeIconOpen" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <h2 id="heroNetWorth" class="text-3xl sm:text-4xl font-extrabold text-white mt-2 tracking-tight">₹0.00</h2>
+
+        <!-- Inline Quick Summary Pills (Invested & Overall Profit) -->
+        <div class="grid grid-cols-2 gap-2.5 mt-3.5 pt-3 border-t border-slate-800/80 text-xs">
+          <div>
+            <p class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Invested Capital</p>
+            <p id="heroInvestedInline" class="text-sm font-bold text-slate-100 mt-0.5">₹0.00</p>
+          </div>
+          <div class="text-right">
+            <p class="text-[10px] uppercase font-semibold tracking-wider text-slate-400">Total Returns</p>
+            <p id="heroTotalGainInline" class="text-sm font-extrabold text-emerald-400 mt-0.5">₹0.00</p>
+          </div>
+        </div>
+
+        <!-- Visual 4-Segment Portfolio Distribution Bar inside Hero -->
+        <div id="heroAllocBarContainer" class="mt-3.5 pt-3 border-t border-slate-800/60 space-y-2">
+          <div id="heroStackedBar" class="w-full h-2 rounded-full bg-surface-950 overflow-hidden flex gap-0.5 p-0.5">
+            <div class="h-full bg-emerald-500 rounded-l-full" style="width: 25%"></div>
+            <div class="h-full bg-amber-400" style="width: 25%"></div>
+            <div class="h-full bg-sky-400" style="width: 25%"></div>
+            <div class="h-full bg-violet-400 rounded-r-full" style="width: 25%"></div>
+          </div>
+          <div id="heroAllocLegend" class="flex flex-wrap items-center justify-between text-[10px] font-semibold text-slate-300 gap-1"></div>
+        </div>
+
+        <!-- Progressive Disclosure Toggle for Extended Breakdown -->
+        <button type="button" id="btnToggleHeroDetails" class="w-full mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400 hover:text-white transition">
+          <span id="heroEquityDebtSplitLabel">Equity vs. Sovereign Split</span>
+          <span id="heroExpandLabel" class="text-emerald-400 font-semibold">Tap for details ▾</span>
+        </button>
+
+        <!-- Hidden-by-default Deep Summary Drawer -->
+        <div id="heroExpandedDrawer" class="hidden grid grid-cols-2 gap-2.5 mt-3 pt-3 border-t border-slate-800/60 text-xs">
+          <div class="rounded-2xl bg-surface-950/60 p-3 border border-slate-800/80">
+            <p class="text-[10px] uppercase tracking-wider text-slate-400">Total Invested</p>
+            <p id="heroInvested" class="text-sm font-bold text-slate-100 mt-0.5">₹0.00</p>
+          </div>
+          <div class="rounded-2xl bg-surface-950/60 p-3 border border-slate-800/80">
+            <p class="text-[10px] uppercase tracking-wider text-slate-400">Net Profit / Gain</p>
+            <p id="heroTotalGain" class="text-sm font-bold text-emerald-400 mt-0.5">₹0.00</p>
+          </div>
+          <div class="rounded-2xl bg-surface-950/60 p-3 border border-slate-800/80">
+            <p class="text-[10px] uppercase tracking-wider text-slate-400">1D Portfolio Change</p>
+            <p id="heroDayGain" class="text-sm font-bold text-slate-200 mt-0.5">₹0</p>
+          </div>
+          <div class="rounded-2xl bg-surface-950/60 p-3 border border-slate-800/80">
+            <p class="text-[10px] uppercase tracking-wider text-slate-400">EPS Pension (Excl.)</p>
+            <p id="heroEpsNote" class="text-sm font-bold text-amber-400 mt-0.5">₹0</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Market Pulse Ribbon (Visible on Home Screen for Instant Market Context) -->
+      <div class="grid grid-cols-2 gap-2.5">
+        <div class="rounded-2xl bg-gradient-to-br from-surface-900 to-[#111927] border border-slate-800/90 p-3.5 space-y-1 shadow-md">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-[11px] font-extrabold tracking-wide text-slate-200">NIFTY 50</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span id="niftyDateBadge" class="text-[9px] text-slate-400">Live</span>
+              <button data-edit-index="nifty" class="btn-edit-index text-[10px] text-slate-500 hover:text-emerald-400">✎</button>
+            </div>
+          </div>
+          <p id="niftyPrice" class="text-base sm:text-lg font-extrabold text-white tracking-tight">24,148.20</p>
+          <div class="flex items-center justify-between gap-1">
+            <p id="niftyChange" class="text-[10px] font-bold text-emerald-400">Syncing...</p>
+            <div id="niftySparkline" class="flex items-end gap-0.5 h-3"></div>
+          </div>
+        </div>
+        <div class="rounded-2xl bg-gradient-to-br from-surface-900 to-[#111927] border border-slate-800/90 p-3.5 space-y-1 shadow-md">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span class="text-[11px] font-extrabold tracking-wide text-slate-200">SENSEX</span>
+            </div>
+            <div class="flex items-center gap-1">
+              <span id="sensexDateBadge" class="text-[9px] text-slate-400">Live</span>
+              <button data-edit-index="sensex" class="btn-edit-index text-[10px] text-slate-500 hover:text-emerald-400">✎</button>
+            </div>
+          </div>
+          <p id="sensexPrice" class="text-base sm:text-lg font-extrabold text-white tracking-tight">79,486.32</p>
+          <div class="flex items-center justify-between gap-1">
+            <p id="sensexChange" class="text-[10px] font-bold text-emerald-400">Syncing...</p>
+            <div id="sensexSparkline" class="flex items-end gap-0.5 h-3"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive 2x2 Asset Class Bento Grid -->
+      <div>
+        <div class="flex items-center justify-between px-1 mb-2">
+          <h3 class="text-xs font-extrabold uppercase tracking-wider text-slate-300">Your Asset Classes</h3>
+          <span class="text-[11px] text-emerald-400/90 font-medium">Tap card to explore ›</span>
+        </div>
+        <div id="overviewAssetCards" class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 md:gap-3.5"></div>
+      </div>
+
+      <!-- Wealth Milestone & Portfolio Intelligence Card -->
+      <div id="overviewInsightsCard" class="rounded-3xl bg-gradient-to-br from-surface-900 via-[#111827] to-indigo-950/25 border border-slate-800/90 p-4 space-y-3.5 shadow-lg"></div>
+
+      <!-- Collapsible Doughnut Chart Drawer Button -->
+      <div class="pt-0.5">
+        <button type="button" id="btnToggleChartDrawer" class="w-full py-2.5 px-4 rounded-2xl bg-surface-900 hover:bg-surface-800 border border-slate-800 flex items-center justify-between text-xs font-semibold text-slate-200 transition active:scale-95">
+          <span>📊 Interactive Doughnut Chart &amp; Category Table</span>
+          <span id="chartDrawerChevron" class="text-slate-400 text-[10px]">▾</span>
+        </button>
+        <button type="button" id="btnToggleMarketDrawer" class="hidden"></button>
+        <span id="marketDrawerChevron" class="hidden"></span>
+        <div id="overviewMarketDrawer" class="hidden"></div>
+      </div>
+
+      <!-- Collapsible Allocation Chart Drawer -->
+      <div id="overviewChartDrawer" class="hidden rounded-2xl bg-surface-900 border border-slate-800 p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300">Asset Allocation Breakdown</h3>
+          <button id="btnQuickAddMf" type="button" class="text-[11px] font-semibold text-emerald-400 hover:underline">+ Add Holding</button>
+        </div>
+        <div class="relative h-48">
+          <canvas id="allocationChart"></canvas>
+        </div>
+        <div id="categoryBreakdownList" class="space-y-2 pt-2 border-t border-slate-800/80"></div>
+      </div>
+    </section>
+
+    <!-- TAB: MUTUAL FUNDS (Groww Dashboard with Top Import & + Add Fund Actions + Full-Screen Investment Details Page) -->
+    <section id="tab-mf" class="tab-panel hidden">
+      <!-- VIEW 1: GROWW DASHBOARD LIST VIEW -->
+      <div id="mfDashboardSubView" class="space-y-4">
+        <button type="button" id="btnMfSubDashboard" class="hidden"></button>
+        <button type="button" id="btnMfSubSips" class="hidden"></button>
+
+        <!-- Mutual Funds Top Header Row: Title on Left, Import & + Add Fund on Right -->
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <span class="text-[10px] font-bold uppercase tracking-widest text-emerald-400">Direct Mutual Funds</span>
+            <h2 class="text-base font-extrabold text-white">Holdings Dashboard</h2>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btnImportMfExcel" type="button" class="px-3 py-1.5 rounded-xl bg-surface-900 hover:bg-surface-800 border border-slate-800 text-slate-200 text-xs font-semibold transition active:scale-95">
+              Import
+            </button>
+            <button id="btnAddMf" type="button" class="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition active:scale-95">
+              + Add Fund
+            </button>
+          </div>
+        </div>
+
+        <!-- Groww Holdings Summary Card (Exact match to screenshot 1000214956.png) -->
+        <div id="mfSummaryCard" class="hidden rounded-2xl bg-[#121722] border border-slate-800/90 p-4 shadow-lg"></div>
+
+        <!-- Groww Sort & Metric Toggle Row -->
+        <div id="mfListHeader" class="hidden flex items-center justify-between px-1 pt-1 text-xs">
+          <span id="mfHoldingsCountLabel" class="text-slate-400 font-medium">Holdings</span>
+          <button type="button" id="btnCycleMfViewMode" class="inline-flex items-center gap-1.5 text-slate-200 font-semibold hover:text-emerald-400 transition">
+            <span class="text-slate-400 text-[11px]">&lt; &gt;</span>
+            <span id="mfViewModeLabel" class="underline decoration-slate-600 underline-offset-4">Day Change (%)</span>
+          </button>
+        </div>
+
+        <!-- Groww Flat Divider List of Funds -->
+        <div id="mfList" class="divide-y divide-slate-800/80 border-y border-slate-800/60"></div>
+      </div>
+
+      <!-- VIEW 2: FULL-SCREEN GROWW "INVESTMENT DETAILS" & LIVE FUND CHART SCREEN (Replaces Popup Modal!) -->
+      <div id="mfDetailScreenView" class="hidden space-y-4 pb-6"></div>
+    </section>
+
+    <!-- TAB: NPS (Distinctive Retirement Corpus & Asset Allocation Design + Full-Screen Scheme Page) -->
+    <section id="tab-nps" class="tab-panel hidden">
+      <!-- VIEW 1: NPS RETIREMENT DASHBOARD -->
+      <div id="npsDashboardSubView" class="space-y-4">
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <span class="text-[10px] font-bold uppercase tracking-widest text-amber-400">National Pension System</span>
+            <h2 class="text-base font-extrabold text-white">Tier I Retirement Vault</h2>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btnImportNpsExcel" type="button" class="px-3 py-1.5 rounded-xl bg-surface-900 hover:bg-surface-800 border border-slate-800 text-slate-200 text-xs font-semibold transition active:scale-95">
+              Import CSV/PDF
+            </button>
+            <button id="btnAddNps" type="button" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition active:scale-95">
+              + Add Scheme
+            </button>
+          </div>
+        </div>
+
+        <!-- Distinctive NPS Hero + E/C/G Stacked Allocation Bar -->
+        <div id="npsSummaryCard" class="hidden rounded-3xl bg-gradient-to-br from-[#161926] via-surface-900 to-amber-950/30 border border-amber-500/25 p-5 shadow-xl"></div>
+
+        <!-- Distinctive Pension Scheme Cards with Left Accent Bar -->
+        <div id="npsList" class="grid grid-cols-1 md:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- VIEW 2: FULL-SCREEN NPS SCHEME DETAILS & HISTORICAL NAV CHART -->
+      <div id="npsDetailScreenView" class="hidden space-y-4 pb-6"></div>
+    </section>
+
+    <!-- TAB: EPF & PPF (Segmented Switcher + Progressive Disclosure) -->
+    <section id="tab-retiral" class="tab-panel hidden space-y-3.5">
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <h2 class="text-base font-extrabold text-white">Retiral &amp; Tax-Free</h2>
+          <p class="text-[11px] text-slate-400">Statutory FY compounding ledgers</p>
+        </div>
+        <button id="btnImportRetiralExcel" type="button" class="px-3 py-1.5 rounded-xl bg-surface-900 hover:bg-surface-800 border border-slate-800 text-slate-200 text-xs font-semibold transition active:scale-95">
+          Import PDF/CSV
+        </button>
+      </div>
+
+      <!-- Segmented Pill Switcher: EPF vs PPF -->
+      <div class="grid grid-cols-2 p-1 rounded-2xl bg-surface-900 border border-slate-800 text-xs font-bold">
+        <button type="button" id="btnSelectEpfSubtab" class="py-2 rounded-xl bg-sky-500/20 text-sky-300 border border-sky-500/30 transition">EPF Corpus (8.25%)</button>
+        <button type="button" id="btnSelectPpfSubtab" class="py-2 rounded-xl text-slate-400 hover:text-white transition">PPF Account (7.10%)</button>
+      </div>
+
+      <!-- EPF Panel -->
+      <div id="epfSubPanel" class="space-y-3">
+        <div id="epfCardBox" class="rounded-3xl bg-gradient-to-br from-surface-900 via-surface-900 to-sky-950/30 border border-slate-800 p-5 space-y-4 shadow-lg">
+          <div class="flex items-start justify-between">
+            <div>
+              <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-sky-500/15 text-sky-300">EPFO • 8.25% p.a.</span>
+              <p class="text-[11px] text-slate-400 mt-2">Total EPF Corpus (Excl. EPS)</p>
+              <h3 id="epfBalanceDisplay" class="text-3xl font-extrabold text-white mt-0.5">₹0</h3>
+            </div>
+            <button id="btnEditEpf" type="button" class="px-3 py-1.5 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-xs font-semibold text-slate-200">Edit</button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800/80 text-xs">
+            <div>
+              <p class="text-[11px] text-slate-400">Principal Contributed</p>
+              <p id="epfInvestedSub" class="text-sm font-bold text-slate-100 mt-0.5">₹0</p>
+            </div>
+            <div class="text-right">
+              <p class="text-[11px] text-slate-400">Interest Credited</p>
+              <p id="epfInterestDisplay" class="text-sm font-bold text-emerald-400 mt-0.5">+₹0</p>
+            </div>
+          </div>
+
+          <!-- On-demand expandable details for EPF -->
+          <details class="rounded-2xl bg-surface-800/60 border border-slate-800 p-3 text-xs">
+            <summary class="font-semibold text-sky-300 cursor-pointer flex items-center justify-between">
+              <span>FY Interest Projection &amp; EPS Pension Pool</span>
+              <span class="text-[10px] text-slate-400">Tap to view ▾</span>
+            </summary>
+            <div class="grid grid-cols-2 gap-2.5 mt-3 pt-2.5 border-t border-slate-800 text-[11px]">
+              <div>
+                <p class="text-slate-400">Current FY Interest</p>
+                <p id="epfEstNextInt" class="font-bold text-emerald-400 mt-0.5">Rate: 8.25% p.a.</p>
+              </div>
+              <div>
+                <p class="text-slate-400">EPS Pension (Separate)</p>
+                <p id="epfPensionDisplay" class="font-bold text-amber-400 mt-0.5">₹0</p>
+              </div>
+              <div class="col-span-2 flex items-center justify-between pt-1 text-slate-400">
+                <span>Monthly Contribution (Emp+VPF+Empr):</span>
+                <strong id="epfMonthlyDisplay" class="text-white">₹0</strong>
+              </div>
+            </div>
+          </details>
+
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="btnOpenEpfLedgerBtn" type="button" class="py-2.5 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-slate-100 text-xs font-semibold transition active:scale-95">
+              📖 <span id="epfCountBadge">View Passbook</span>
+            </button>
+            <button id="btnLogEpfMonth" type="button" class="py-2.5 px-3 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/30 text-sky-300 text-xs font-semibold transition active:scale-95">
+              + Log Month
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PPF Panel (Hidden until PPF pill selected) -->
+      <div id="ppfSubPanel" class="hidden space-y-3">
+        <div id="ppfCardBox" class="rounded-3xl bg-gradient-to-br from-surface-900 via-surface-900 to-violet-950/30 border border-slate-800 p-5 space-y-4 shadow-lg">
+          <div class="flex items-start justify-between">
+            <div>
+              <span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-violet-500/15 text-violet-300">PPF • 7.10% p.a. (Tax-Free)</span>
+              <p class="text-[11px] text-slate-400 mt-2">Total PPF Balance</p>
+              <h3 id="ppfBalanceDisplay" class="text-3xl font-extrabold text-white mt-0.5">₹0</h3>
+            </div>
+            <button id="btnEditPpf" type="button" class="px-3 py-1.5 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-xs font-semibold text-slate-200">Edit</button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800/80 text-xs">
+            <div>
+              <p class="text-[11px] text-slate-400">Principal Invested</p>
+              <p id="ppfInvestedSub" class="text-sm font-bold text-slate-100 mt-0.5">₹0</p>
+            </div>
+            <div class="text-right">
+              <p class="text-[11px] text-slate-400">Interest Earned</p>
+              <p id="ppfInterestDisplay" class="text-sm font-bold text-emerald-400 mt-0.5">+₹0</p>
+            </div>
+          </div>
+
+          <!-- On-demand expandable details for PPF -->
+          <details class="rounded-2xl bg-surface-800/60 border border-slate-800 p-3 text-xs">
+            <summary class="font-semibold text-violet-300 cursor-pointer flex items-center justify-between">
+              <span>FY Interest Projection (5th-of-Month Rule)</span>
+              <span class="text-[10px] text-slate-400">Tap to view ▾</span>
+            </summary>
+            <div class="grid grid-cols-2 gap-2.5 mt-3 pt-2.5 border-t border-slate-800 text-[11px]">
+              <div>
+                <p class="text-slate-400">Current FY Interest</p>
+                <p id="ppfEstNextInt" class="font-bold text-emerald-400 mt-0.5">Rate: 7.10% p.a.</p>
+              </div>
+              <div>
+                <p class="text-slate-400">Overall Return</p>
+                <p id="ppfReturnPctDisplay" class="font-bold text-emerald-400 mt-0.5">+0.0%</p>
+              </div>
+              <div class="col-span-2 flex items-center justify-between pt-1 text-slate-400">
+                <span>Planned Deposit:</span>
+                <strong id="ppfMonthlyDisplay" class="text-white">₹0</strong>
+              </div>
+            </div>
+          </details>
+
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <button id="btnOpenPpfLedgerBtn" type="button" class="py-2.5 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-slate-100 text-xs font-semibold transition active:scale-95">
+              📖 <span id="ppfCountBadge">View Passbook</span>
+            </button>
+            <button id="btnLogPpfMonth" type="button" class="py-2.5 px-3 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-300 text-xs font-semibold transition active:scale-95">
+              + Add Entry
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Native 4-Tab Bottom Navigation Bar (Profile lives in the Top-Right Avatar Sidebar, just like Groww) -->
+  <nav class="md:hidden shrink-0 z-30 bg-surface-950/95 backdrop-blur-lg border-t border-slate-800/80">
+    <div class="grid grid-cols-4 h-16" id="mobileNav">
+      <button data-tab="overview" class="nav-tab flex flex-col items-center justify-center gap-1 text-[11px] font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        <span>Home</span>
+      </button>
+      <button data-tab="mf" class="nav-tab flex flex-col items-center justify-center gap-1 text-[11px] font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/><path stroke-linecap="round" stroke-linejoin="round" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/></svg>
+        <span>Mutual Funds</span>
+      </button>
+      <button data-tab="nps" class="nav-tab flex flex-col items-center justify-center gap-1 text-[11px] font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        <span>NPS</span>
+      </button>
+      <button data-tab="retiral" class="nav-tab flex flex-col items-center justify-center gap-1 text-[11px] font-semibold">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span>EPF &amp; PPF</span>
+      </button>
+    </div>
+  </nav>
+  </div><!-- End Mobile App Shell -->
+
+  <!-- GROWW-STYLE SLIDE-OVER PROFILE & SETTINGS SIDEBAR DRAWER -->
+  <div id="profileSidebarBackdrop" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex justify-end">
+    <aside id="tab-guide" class="w-full max-w-sm md:max-w-md bg-surface-950 border-l border-slate-800 h-[100dvh] flex flex-col shadow-2xl overflow-hidden">
+      <!-- Sidebar Top Bar -->
+      <div class="shrink-0 px-4 py-3.5 border-b border-slate-800/90 flex items-center justify-between bg-surface-900/70">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-extrabold text-white">Profile &amp; Settings</span>
+          <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold">v17.0</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button type="button" id="btnSidebarToggleTheme" class="px-2.5 py-1 rounded-xl bg-surface-800 border border-slate-700 text-[11px] font-bold text-slate-300 hover:text-emerald-400 flex items-center gap-1 transition active:scale-95">
+            <span class="theme-toggle-icon">☀️</span>
+            <span class="theme-toggle-label">Light Mode</span>
+          </button>
+          <button type="button" id="btnCloseProfileSidebar" class="p-1.5 rounded-xl bg-surface-800 text-slate-400 hover:text-white">✕</button>
+        </div>
+      </div>
+      <!-- Scrollable Sidebar Body -->
+      <div class="flex-1 overflow-y-auto no-scrollbar p-4 space-y-3.5">
+
+      <!-- Profile Hero Card (Cleanly Aligned Groww-Style Drawer Header) -->
+      <div class="rounded-2xl bg-gradient-to-br from-surface-900 via-surface-900 to-emerald-950/30 border border-slate-800 p-4 shadow-xl space-y-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3 min-w-0 flex-1">
+            <div id="profileTabAvatar" class="w-12 h-12 shrink-0 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-sm font-extrabold text-white shadow-md shadow-emerald-500/20 ring-2 ring-emerald-500/30">
+              KK
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <h2 id="profileTabName" class="text-base font-extrabold text-white truncate">Admin</h2>
+                <span id="profileTabRolePill" class="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">👑 Admin</span>
+              </div>
+              <p id="profileTabEmail" class="text-xs text-slate-400 truncate mt-0.5">No email set</p>
+              <p id="profileTabMobile" class="text-[11px] text-slate-500 truncate mt-0.5">Session timeout: 30 mins</p>
+            </div>
+          </div>
+          <button type="button" id="btnSwitchUserLock" class="shrink-0 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-xs font-bold text-rose-300 transition active:scale-95">
+            Logout
+          </button>
+        </div>
+
+        <!-- Sidebar Quick Action: Lock Screen Now -->
+        <div class="pt-3 border-t border-slate-800/80">
+          <button type="button" id="btnLockAppNow" class="w-full py-2 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-xs font-bold text-amber-300 inline-flex items-center justify-center gap-1.5 transition active:scale-95">
+            <svg class="w-3.5 h-3.5 text-amber-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            <span>Lock Vault Screen</span>
+          </button>
+        </div>
+        <button type="button" id="btnMfSyncGmail" class="hidden"></button>
+      </div>
+
+      <!-- Read-Only Viewer Notice (Shown only when logged in as Viewer) -->
+      <div id="viewerRestrictedNotice" class="hidden rounded-2xl bg-sky-950/30 border border-sky-500/30 p-4 text-xs text-sky-200 space-y-1">
+        <p class="font-bold text-sky-300">👁️ Read-Only Viewer Session Active</p>
+        <p class="text-[11px] text-slate-300 leading-relaxed">Profile editing, PIN changes, Gmail sync, and vault backups are restricted to the <strong>Admin</strong> role. Tap <strong>Switch User</strong> above to unlock with the Admin PIN.</p>
+      </div>
+
+      <!-- Admin-Only Settings Sections -->
+      <div id="adminSettingsContainer" class="space-y-3">
+        <!-- Section 1: Edit Personal Profile (Name, Mobile, Email) -->
+        <details class="rounded-2xl bg-surface-900 border border-slate-800 p-4 text-xs group">
+          <summary class="font-bold text-white cursor-pointer flex items-center justify-between">
+            <span class="flex items-center gap-2">👤 Edit Personal Profile (Name, Mobile, Email)</span>
+            <span class="text-emerald-400 text-[10px]">▾</span>
+          </summary>
+          <div class="mt-3 pt-3 border-t border-slate-800 space-y-2.5">
+            <div>
+              <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Full Name</label>
+              <input id="profInputName" type="text" placeholder="Your Full Name" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white font-semibold" />
+            </div>
+            <div class="grid grid-cols-2 gap-2.5">
+              <div>
+                <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Mobile Number</label>
+                <input id="profInputMobile" type="tel" placeholder="+91 9876543210" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+              </div>
+              <div>
+                <label class="block text-[10px] uppercase font-bold text-slate-400 mb-1">Email Address</label>
+                <input id="profInputEmail" type="email" placeholder="you@gmail.com" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white" />
+              </div>
+            </div>
+            <button type="button" id="btnSaveProfileDetails" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition active:scale-95">
+              Save Profile Info
+            </button>
+          </div>
+        </details>
+
+        <!-- Section 2: User Directory, Role Management & Security Settings -->
+        <details class="rounded-2xl bg-surface-900 border border-slate-800 p-4 text-xs">
+          <summary class="font-bold text-white cursor-pointer flex items-center justify-between">
+            <span class="flex items-center gap-2">🛡️ Users, Roles &amp; Security Settings</span>
+            <span class="text-emerald-400 text-[10px]">▾</span>
+          </summary>
+          <div class="mt-3 pt-3 border-t border-slate-800 space-y-3">
+            <!-- Registered Users Directory -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-[10px] uppercase font-bold text-slate-400">Registered Profiles</span>
+                <button type="button" id="btnOpenAddUserModal" class="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] transition active:scale-95">
+                  + Create User / Role
+                </button>
+              </div>
+              <div id="profileUsersDirectoryList" class="space-y-2"></div>
+            </div>
+
+            <!-- Action Buttons for Proper PIN Change & Recovery Verification -->
+            <div class="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80">
+              <button type="button" id="btnOpenChangePinModal" class="py-2.5 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-white font-semibold transition active:scale-95">
+                🔑 Change My PIN
+              </button>
+              <button type="button" id="btnOpenRecoverySettingsModal" class="py-2.5 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-amber-300 font-semibold transition active:scale-95">
+                🛡️ Recovery Qs &amp; Key
+              </button>
+            </div>
+
+            <!-- App Behavior Toggles: Auto-Sync on Login, Biometrics, Session Timeout -->
+            <div class="pt-2 border-t border-slate-800/80 space-y-2">
+              <div class="rounded-xl bg-surface-800/90 border border-slate-700/80 p-3 flex items-center justify-between gap-3">
+                <div>
+                  <p class="font-bold text-white text-xs">Auto-Sync NAVs &amp; Gmail on Login</p>
+                  <p class="text-[10px] text-slate-400 mt-0.5">Refreshes NAVs, Indices &amp; Gmail during login (if &gt;30m old)</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input type="checkbox" id="profAutoSyncLoginToggle" class="sr-only peer" checked />
+                  <div class="w-10 h-5 bg-slate-700 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
+                </label>
+              </div>
+
+              <div class="rounded-xl bg-surface-800/90 border border-slate-700/80 p-3 flex items-center justify-between gap-3">
+                <div>
+                  <p class="font-bold text-white text-xs">Fingerprint / Biometric Login</p>
+                  <p class="text-[10px] text-slate-400 mt-0.5">Enable on direct HTTPS; keep OFF inside Google Apps Script iframe</p>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input type="checkbox" id="profBiometricToggle" class="sr-only peer" />
+                  <div class="w-10 h-5 bg-slate-700 rounded-full peer peer-checked:bg-emerald-500 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-5"></div>
+                </label>
+              </div>
+
+              <div>
+                <label class="block text-[10px] uppercase font-bold text-emerald-400 mb-1">Active Session Timeout (When Switching Apps)</label>
+                <select id="profSessionTimeoutSelect" class="w-full px-3 py-2 rounded-xl bg-surface-800 border border-slate-700 text-white font-semibold">
+                  <option value="5">5 Minutes</option>
+                  <option value="15">15 Minutes</option>
+                  <option value="30">30 Minutes (Recommended)</option>
+                  <option value="60">1 Hour</option>
+                  <option value="240">4 Hours</option>
+                  <option value="1440">24 Hours (Until Explicit Logout)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Section 3: AES-256-GCM Encrypted Vault & Backups (With Clear Explanations) -->
+        <details class="rounded-2xl bg-surface-900 border border-slate-800 p-4 text-xs">
+          <summary class="font-bold text-white cursor-pointer flex items-center justify-between">
+            <span class="flex items-center gap-2">🔐 Cloud Sync &amp; Local Portfolio Backups</span>
+            <span class="text-emerald-400 text-[10px]">▾</span>
+          </summary>
+          <div class="mt-3 pt-3 border-t border-slate-800 space-y-2.5">
+            <div class="rounded-xl bg-surface-800/70 border border-slate-700/70 p-2.5 space-y-2">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="font-bold text-teal-300">1. Encrypted Cloud Sync (Apps Script)</p>
+                  <p class="text-[10px] text-slate-400">Saves AES-256-GCM encrypted vault in your Script Properties</p>
+                </div>
+                <button type="button" id="btnTabCloudDriveSync" class="shrink-0 py-2 px-3 rounded-xl bg-teal-600/25 hover:bg-teal-600/35 border border-teal-500/40 text-teal-300 font-bold">Sync Now</button>
+              </div>
+              <div class="pt-1.5 border-t border-slate-700/60 space-y-1">
+                <label class="block text-[10px] text-slate-400">Optional Personal Apps Script <code>/exec</code> URL (For Gmail Sync when hosted on GitHub Pages):</label>
+                <div class="flex gap-1.5">
+                  <input id="profGasBridgeUrlInput" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="flex-1 px-2.5 py-1.5 rounded-xl bg-surface-900 border border-slate-700 text-white text-[11px]" />
+                  <button type="button" id="btnSaveGasBridgeUrl" class="shrink-0 px-2.5 py-1.5 rounded-xl bg-surface-700 hover:bg-surface-600 text-emerald-300 font-bold text-[11px]">Save URL</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-xl bg-surface-800/70 border border-slate-700/70 p-2.5 space-y-2">
+              <p class="font-bold text-emerald-300">2. Encrypted File Backup (.enc.json)</p>
+              <p class="text-[10px] text-slate-400">Locks your data with AES-256-GCM encryption before downloading to your phone</p>
+              <div class="flex gap-2">
+                <input id="profVaultPassphrase" type="password" placeholder="Optional Passphrase (uses Admin PIN if blank)" class="flex-1 px-2.5 py-1.5 rounded-xl bg-surface-900 border border-slate-700 text-white" />
+                <button type="button" id="btnTabExportEncVault" class="shrink-0 py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold">Download .enc</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 pt-1">
+              <button type="button" id="btnTabExportPlainJson" class="py-2 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-slate-200 font-semibold">3. Plain JSON Backup</button>
+              <button type="button" id="btnTabSaveSelfHtml" class="py-2 px-3 rounded-xl bg-surface-800 hover:bg-surface-700 border border-slate-700 text-slate-200 font-semibold">4. Save Offline HTML</button>
+            </div>
+            <button id="btnInspectRawStorage" type="button" class="w-full py-2 px-3 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 font-bold text-indigo-300 text-xs mt-1">
+              🔍 View Where My Data Is Stored (Raw JSON Inspector)
+            </button>
+
+            <div class="pt-2 border-t border-slate-800">
+              <label class="block text-slate-300 font-semibold mb-1">5. Restore Portfolio from File (.enc.json or .json)</label>
+              <input id="profInputRestoreFile" type="file" class="w-full text-slate-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-surface-800 file:text-emerald-300" />
+            </div>
+
+            <div class="pt-2 border-t border-slate-800">
+              <button id="btnFactoryResetVault" type="button" class="w-full py-2 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 font-bold text-rose-300 text-xs">
+                🗑️ Factory Reset: Wipe Cloud Properties &amp; Local Vault (Start Fresh at ₹0)
+              </button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Section 4: App Guide (Available to all roles) -->
+      <details class="rounded-2xl bg-surface-900 border border-slate-800 p-4 text-xs">
+        <summary class="font-bold text-white cursor-pointer flex items-center justify-between">
+          <span>📖 Step-by-Step Import &amp; Hosting Guide</span>
+          <span class="text-emerald-400 text-[10px]">▾</span>
+        </summary>
+        <div class="mt-3 pt-3 border-t border-slate-800 space-y-2 text-slate-300 leading-relaxed">
+          <p><strong class="text-emerald-300">1. Google Apps Script ("Only myself"):</strong> Paste <code>code.gs</code> and <code>index.html</code> in your project at <code>script.google.com</code>, deploy with <strong>Execute as: Me</strong> and <strong>Who has access: Only myself</strong>, and open your <code>/exec</code> URL in Chrome.</p>
+          <p><strong class="text-emerald-300">2. Mutual Funds &amp; NPS:</strong> Use <strong>Import</strong> on the MFs or NPS tab to upload Groww Excel/CSV or Protean CRA Transaction CSVs.</p>
+          <p><strong class="text-emerald-300">3. EPF &amp; PPF:</strong> Use <strong>Import PDF/CSV</strong> on the EPF/PPF tab to upload your 2018–2026 EPFO Passbook PDFs and PPF statements.</p>
+        </div>
+      </details>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- Native Bottom Sheet Overlay -->
+  <div id="modalBackdrop" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end justify-center">
+    <div id="modalCard" class="sheet-animate w-full max-w-md bg-surface-900 border-t border-slate-800 rounded-t-3xl px-5 pt-3 pb-6 max-h-[88dvh] overflow-y-auto no-scrollbar space-y-3.5 shadow-2xl">
+      <div class="w-10 h-1 rounded-full bg-slate-700 mx-auto mb-1"></div>
+      <div class="flex items-center justify-between gap-2">
+        <h3 id="modalTitle" class="text-sm font-extrabold text-white leading-snug">Details</h3>
+        <button id="btnCloseModal" type="button" class="p-1.5 rounded-xl bg-surface-800 text-slate-400 hover:text-white shrink-0">✕</button>
+      </div>
+      <div id="modalBody" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="hidden fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-surface-800 border border-slate-700 text-xs font-semibold text-white shadow-2xl"></div>
+
+  <script src="1-state-render.js"></script>
+  <script src="2-parsers.js"></script>
+  <script src="3-auth-ui.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
+
+</body>
+</html>

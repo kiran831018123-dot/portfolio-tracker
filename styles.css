@@ -1,0 +1,171 @@
+html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      max-width: 100vw !important;
+      overflow-x: hidden;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background-color: #070b14;
+      color: #f1f5f9;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      overscroll-behavior-y: none;
+    }
+    .touch-scroll-list {
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+    }
+    .touch-scroll-list::-webkit-scrollbar {
+      width: 5px;
+    }
+    .touch-scroll-list::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.35);
+      border-radius: 9999px;
+    }
+    input, textarea, pre {
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    @keyframes slideUpSheet {
+      from { transform: translateY(100%); opacity: 0.6; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .sheet-animate {
+      animation: slideUpSheet 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes shakePin {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-8px); }
+      40%, 80% { transform: translateX(8px); }
+    }
+    .pin-shake {
+      animation: shakePin 0.35s ease-in-out;
+    }
+    @keyframes tabFadeSlide {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .tab-panel:not(.hidden) {
+      animation: tabFadeSlide 0.18s ease-out;
+    }
+
+    /* Light Theme Mode (Groww / Clean Daylight Palette) */
+    html.light-theme,
+    html.light-theme body {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+    html.light-theme #appLockScreen,
+    html.light-theme #appMainScroll {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
+    html.light-theme #mainAppHeader,
+    html.light-theme nav.fixed.bottom-0,
+    html.light-theme #tab-guide {
+      background-color: rgba(255, 255, 255, 0.96) !important;
+      border-color: #e2e8f0 !important;
+    }
+    html.light-theme .bg-surface-950,
+    html.light-theme .bg-surface-950\/95,
+    html.light-theme .bg-\[\#070b14\],
+    html.light-theme .bg-\[\#070b14\]\/95 {
+      background-color: #ffffff !important;
+    }
+    html.light-theme .bg-surface-900,
+    html.light-theme .bg-surface-900\/95,
+    html.light-theme .bg-surface-900\/90,
+    html.light-theme .bg-surface-900\/80,
+    html.light-theme .bg-surface-900\/70,
+    html.light-theme .bg-\[\#121722\],
+    html.light-theme .bg-\[\#161926\],
+    html.light-theme .bg-\[\#0f1522\],
+    html.light-theme .bg-\[\#0d1320\] {
+      background-color: #ffffff !important;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05) !important;
+    }
+    html.light-theme .bg-surface-800,
+    html.light-theme .bg-surface-800\/90,
+    html.light-theme .bg-surface-800\/80,
+    html.light-theme .bg-surface-800\/70,
+    html.light-theme .bg-surface-800\/60 {
+      background-color: #f1f5f9 !important;
+    }
+    html.light-theme .bg-surface-700 {
+      background-color: #e2e8f0 !important;
+    }
+    html.light-theme [class*="from-surface-900"],
+    html.light-theme [class*="from-[#0d1526]"],
+    html.light-theme [class*="from-[#0f172a]"] {
+      background-image: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%) !important;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06) !important;
+    }
+    html.light-theme .border-slate-800,
+    html.light-theme .border-slate-800\/90,
+    html.light-theme .border-slate-800\/80,
+    html.light-theme .border-slate-800\/70,
+    html.light-theme .border-slate-800\/60,
+    html.light-theme .border-slate-700,
+    html.light-theme .border-slate-700\/80,
+    html.light-theme .border-slate-700\/70,
+    html.light-theme .border-slate-700\/60 {
+      border-color: #e2e8f0 !important;
+    }
+    html.light-theme .text-white:not([class*="bg-emerald-"]):not([class*="bg-teal-"]):not([class*="bg-rose-"]):not([class*="bg-amber-"]):not([class*="bg-indigo-"]):not([class*="bg-sky-"]):not([class*="from-emerald-"]):not([class*="from-sky-"]):not([class*="from-amber-"]):not([class*="from-indigo-"]) {
+      color: #0f172a !important;
+    }
+    html.light-theme .text-slate-100,
+    html.light-theme .text-slate-200 {
+      color: #1e293b !important;
+    }
+    html.light-theme .text-slate-300 {
+      color: #334155 !important;
+    }
+    html.light-theme .text-slate-400 {
+      color: #475569 !important;
+    }
+    html.light-theme .text-slate-500 {
+      color: #64748b !important;
+    }
+    html.light-theme .text-emerald-300,
+    html.light-theme .text-emerald-400 {
+      color: #059669 !important;
+    }
+    html.light-theme .text-teal-300,
+    html.light-theme .text-teal-400 {
+      color: #0d9488 !important;
+    }
+    html.light-theme .text-amber-300,
+    html.light-theme .text-amber-400 {
+      color: #d97706 !important;
+    }
+    html.light-theme .text-sky-300,
+    html.light-theme .text-sky-400 {
+      color: #0284c7 !important;
+    }
+    html.light-theme .text-indigo-300,
+    html.light-theme .text-indigo-400 {
+      color: #4f46e5 !important;
+    }
+    html.light-theme .text-rose-200,
+    html.light-theme .text-rose-300,
+    html.light-theme .text-rose-400 {
+      color: #e11d48 !important;
+    }
+    html.light-theme input,
+    html.light-theme select,
+    html.light-theme textarea {
+      background-color: #f8fafc !important;
+      color: #0f172a !important;
+      border-color: #cbd5e1 !important;
+    }
+    html.light-theme .pin-key {
+      background-color: #ffffff !important;
+      border-color: #cbd5e1 !important;
+      color: #0f172a !important;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+    }
