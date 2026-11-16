@@ -2575,13 +2575,11 @@ const SECURITY_KEY = 'wealthlocal_security_v16';
         return;
       }
 
-      // Attempt 4: Seamless Same-Tab Auto-Return Redirect (`Only myself` First-Party Cookie Verification)
-      // When "Who has access: Only myself" is enabled and mobile Chrome blocks 3P cookies inside hidden iframes,
-      // navigate in the same tab with `&returnUrl=...` so Google verifies your first-party login cookie and immediately bounces back with `#wl_gmail_sync=<base64>`!
-      showAppLoader('Verifying Google Session ("Only myself")...', 'Completing authenticated Gmail sync & returning automatically...', 75);
-      const cleanReturnUrl = window.location.href.split('#')[0];
-      saveActiveSession(currentUserRole, currentUserName);
-      window.location.href = `${bridgeUrl}${sep}mode=bridge&returnUrl=${encodeURIComponent(cleanReturnUrl)}&_t=${Date.now()}`;
+      hideAppLoader();
+      const msg = 'Could not reach Google Apps Script in background because Chrome blocks third-party Google cookies on github.io when deployment is set to "Only myself". Make sure you deployed the latest code.gs in Google Apps Script (Deploy -> Manage deployments -> Edit -> New version).';
+      setStatus(`<span class="text-amber-300">⚠️ ${msg}</span>`);
+      showToast('⚠️ Background Gmail Sync blocked by browser cookie policy — check Gmail Sync dialog');
+      if (!statusEl) openGmailSyncModal();
     }
 
     async function triggerOneClickGmailSync() {
