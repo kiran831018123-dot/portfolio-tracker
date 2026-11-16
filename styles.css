@@ -98,11 +98,37 @@ html, body {
     html.light-theme .bg-surface-700 {
       background-color: #e2e8f0 !important;
     }
+    html.light-theme .bg-surface-950\/60,
+    html.light-theme .bg-surface-950\/70,
+    html.light-theme .bg-surface-900\/40,
+    html.light-theme .bg-surface-900\/50,
+    html.light-theme .bg-emerald-950\/25,
+    html.light-theme .bg-sky-950\/30,
+    html.light-theme .bg-black\/80,
+    html.light-theme .bg-slate-700,
+    html.light-theme .bg-surface-600 {
+      background-color: #f1f5f9 !important;
+      color: #0f172a !important;
+    }
     html.light-theme [class*="from-surface-900"],
     html.light-theme [class*="from-[#0d1526]"],
-    html.light-theme [class*="from-[#0f172a]"] {
-      background-image: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%) !important;
-      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06) !important;
+    html.light-theme [class*="from-[#0f172a]"],
+    html.light-theme [class*="from-[#0f1c2e]"],
+    html.light-theme [class*="via-surface-900"],
+    html.light-theme [class*="via-[#111827]"],
+    html.light-theme [class*="to-[#0a231e]"],
+    html.light-theme [class*="to-[#111927]"] {
+      background-color: #ffffff !important;
+      background-image: linear-gradient(135deg, #ffffff 0%, #ecfdf5 60%, #f0fdfa 100%) !important;
+      border-color: #a7f3d0 !important;
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.08) !important;
+    }
+    html.light-theme #npsSummaryCard,
+    html.light-theme [class*="from-[#161926]"] {
+      background-color: #ffffff !important;
+      background-image: linear-gradient(135deg, #ffffff 0%, #fffbeb 65%, #fef3c7 100%) !important;
+      border-color: #fde68a !important;
+      box-shadow: 0 6px 20px rgba(245, 158, 11, 0.08) !important;
     }
     html.light-theme .border-slate-800,
     html.light-theme .border-slate-800\/90,
