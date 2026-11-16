@@ -46,7 +46,7 @@ function openExcelImportModal(targetType) {
         URL.revokeObjectURL(url);
       });
 
-      // Zero preloaded user folios or amounts — 100% parsed dynamically from the uploaded file
+      // 100% Zero Hardcoded Data — All folios, units, and values are parsed dynamically from your files or Gmail Sync
       const KNOWN_FOLIOS = {};
       const KNOWN_UNITS = [];
 
@@ -497,28 +497,37 @@ function openExcelImportModal(targetType) {
           return jsonRows;
         }
         if (npsSpecial.length > 0) return npsSpecial;
-        // Fallback when sharedStrings.xml was placed at the end of a streaming XLSX:
+        // Fallback when sharedStrings.xml was truncated at the end of a streaming Groww XLSX:
         for (let r = 0; r < grid.length; r++) {
           const rowArr = grid[r];
           if (!Array.isArray(rowArr)) continue;
-          const u = cleanNum(rowArr[6]);
+          const u = cleanNum(rowArr[6] !== undefined ? rowArr[6] : rowArr[5]);
           if (u <= 0) continue;
           const folioStr = String(rowArr[4] || '').trim().replace(/\.0+$/, '');
           const knownByFolio = KNOWN_FOLIOS[folioStr];
           const knownByUnits = KNOWN_UNITS.find(k => Math.abs(k.units - u) < 0.01);
-          const known = knownByFolio || knownByUnits;
+          // Dynamic cross-match against existing funds in `state.mutualFunds` (e.g. synced from Gmail) if sharedStrings.xml was truncated
+          const existingMatch = state.mutualFunds.find(f =>
+            (folioStr && f.folio && f.folio === folioStr) ||
+            (Number(f.units) > 0 && Math.abs(Number(f.units) - u) / Math.max(u, 1) < 0.25)
+          );
+          const schemeCandidate = String(rowArr[0] || rowArr[1] || (existingMatch ? existingMatch.name : '')).trim();
+          if (!schemeCandidate || /^scheme\s*name|total|summary/i.test(schemeCandidate)) continue;
 
           const rawInv = cleanNum(rowArr[7]);
           const rawCur = cleanNum(rowArr[8]);
           const rawRet = cleanNum(rowArr[9]);
-          const inv = rawInv > 0 ? rawInv : (known ? known.invested : 0);
-          const cur = rawCur > 0 ? rawCur : (rawInv > 0 && rawRet !== 0 ? rawInv + rawRet : (known ? known.curVal : inv));
+          const fallbackNav = existingMatch && Number(existingMatch.currentNav) > 0 ? Number(existingMatch.currentNav) : 0;
+          const estCurFromNav = (rawCur <= 0 && fallbackNav > 0) ? +(u * fallbackNav).toFixed(2) : rawCur;
+          const inv = rawInv > 0 ? rawInv : (estCurFromNav > 0 && rawRet !== 0 ? +(estCurFromNav - rawRet).toFixed(2) : (existingMatch ? Number(existingMatch.invested || 0) : 0));
+          const cur = estCurFromNav > 0 ? estCurFromNav : (inv > 0 && rawRet !== 0 ? +(inv + rawRet).toFixed(2) : inv);
+          if (inv <= 0 && cur <= 0) continue;
 
           jsonRows.push({
-            'Scheme Name': rowArr[0] || (known ? known.name : `Mutual Fund (Folio ${folioStr || (r + 1)})`),
-            'Scheme Code': known ? known.code : '000000',
-            'Category': rowArr[3] || rowArr[2] || (known ? known.cat : 'Equity'),
-            'Folio No.': folioStr || (known ? known.folio : ''),
+            'Scheme Name': schemeCandidate,
+            'Scheme Code': (existingMatch && existingMatch.schemeCode) ? existingMatch.schemeCode : '000000',
+            'Category': String(rowArr[3] || rowArr[2] || (existingMatch ? existingMatch.category : 'Equity')).trim(),
+            'Folio No.': folioStr || (existingMatch ? existingMatch.folio : ''),
             'Units': u,
             'Invested Value': inv,
             'Current Value': cur
@@ -598,9 +607,66 @@ function openExcelImportModal(targetType) {
         return idx - 1;
       }
 
+      // Repair Apache POI / Groww streaming ZIP headers in-place by copying CRC32, compressedSize & uncompressedSize
+      // from the ZIP Central Directory (`PK\x01\x02`) into each Local File Header (`PK\x03\x04`) so SheetJS (`XLSX.read`) succeeds natively!
+      function repairStreamingZipInPlace(u8) {
+        try {
+          const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+          const cdEntries = [];
+          for (let i = 0; i + 46 <= u8.length; i++) {
+            if (u8[i] === 0x50 && u8[i + 1] === 0x4B && u8[i + 2] === 0x01 && u8[i + 3] === 0x02) {
+              const method = dv.getUint16(i + 10, true);
+              const crc = dv.getUint32(i + 16, true);
+              const compSize = dv.getUint32(i + 20, true);
+              const uncompSize = dv.getUint32(i + 24, true);
+              const fnLen = dv.getUint16(i + 28, true);
+              const extraLen = dv.getUint16(i + 30, true);
+              const commentLen = dv.getUint16(i + 32, true);
+              const localOff = dv.getUint32(i + 42, true);
+              if (fnLen > 0 && fnLen < 260 && i + 46 + fnLen <= u8.length && localOff + 30 <= u8.length) {
+                const fileName = new TextDecoder('utf-8').decode(u8.subarray(i + 46, i + 46 + fnLen));
+                cdEntries.push({ method, crc, compSize, uncompSize, localOff, fileName });
+                if (u8[localOff] === 0x50 && u8[localOff + 1] === 0x4B && u8[localOff + 2] === 0x03 && u8[localOff + 3] === 0x04) {
+                  // Patch local header CRC32, compressed size, and uncompressed size and clear bit 3 data-descriptor flag
+                  const lFlags = dv.getUint16(localOff + 6, true);
+                  dv.setUint16(localOff + 6, lFlags & ~0x0008, true);
+                  dv.setUint32(localOff + 14, crc, true);
+                  dv.setUint32(localOff + 18, compSize, true);
+                  dv.setUint32(localOff + 22, uncompSize, true);
+                }
+                const cFlags = dv.getUint16(i + 8, true);
+                dv.setUint16(i + 8, cFlags & ~0x0008, true);
+                i += 45 + fnLen + extraLen + commentLen;
+              }
+            }
+          }
+          return cdEntries;
+        } catch (e) {
+          return [];
+        }
+      }
+
       async function parseBrokenXlsxLocally(u8) {
         const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+        const cdEntries = repairStreamingZipInPlace(u8);
         const entries = {};
+        if (cdEntries.length > 0) {
+          for (const cd of cdEntries) {
+            if (!cd.fileName.endsWith('.xml')) continue;
+            const pos = cd.localOff;
+            const fnLen = dv.getUint16(pos + 26, true);
+            const exLen = dv.getUint16(pos + 28, true);
+            const dataStart = pos + 30 + fnLen + exLen;
+            const dataEnd = cd.compSize > 0 ? Math.min(u8.length, dataStart + cd.compSize) : u8.length;
+            try {
+              const xmlStr = cd.method === 0
+                ? new TextDecoder('utf-8').decode(u8.subarray(dataStart, dataEnd))
+                : await inflateRawBytes(u8.subarray(dataStart, dataEnd));
+              if (xmlStr) entries[cd.fileName.replace(/^\/+/, '')] = xmlStr;
+            } catch (e) {}
+          }
+        }
+        // Also scan local headers in case any XML entry was missed
         const headerOffsets = [];
         for (let i = 0; i + 30 < u8.length; i++) {
           if (u8[i] === 0x50 && u8[i + 1] === 0x4B && u8[i + 2] === 0x03 && u8[i + 3] === 0x04) {
@@ -613,18 +679,40 @@ function openExcelImportModal(targetType) {
         for (let idx = 0; idx < headerOffsets.length; idx++) {
           const pos = headerOffsets[idx];
           const method = dv.getUint16(pos + 8, true);
+          let compSz = dv.getUint32(pos + 18, true);
           const fnLen = dv.getUint16(pos + 26, true);
           const exLen = dv.getUint16(pos + 28, true);
           const nameStart = pos + 30;
           const dataStart = nameStart + fnLen + exLen;
-          const fileName = new TextDecoder('utf-8').decode(u8.subarray(nameStart, nameStart + fnLen));
-          const nextPos = idx + 1 < headerOffsets.length ? headerOffsets[idx + 1] : u8.length;
+          const fileName = new TextDecoder('utf-8').decode(u8.subarray(nameStart, nameStart + fnLen)).replace(/^\/+/, '');
+          if (entries[fileName]) continue;
+          const boundEnd = idx + 1 < headerOffsets.length ? headerOffsets[idx + 1] : u8.length;
+          // If streaming ZIP has compSz === 0, scan between dataStart and boundEnd for the PK\x07\x08 Data Descriptor!
+          if (compSz === 0 && boundEnd > dataStart + 12) {
+            for (let d = boundEnd - 16; d >= dataStart; d--) {
+              if (u8[d] === 0x50 && u8[d + 1] === 0x4B && u8[d + 2] === 0x07 && u8[d + 3] === 0x08) {
+                const candidateComp = dv.getUint32(d + 8, true);
+                if (candidateComp === (d - dataStart)) {
+                  compSz = candidateComp;
+                  break;
+                }
+              }
+            }
+            // Also check 12-byte Data Descriptor without PK\x07\x08 signature at boundEnd - 12
+            if (compSz === 0 && boundEnd - 12 >= dataStart) {
+              const candidateComp12 = dv.getUint32(boundEnd - 8, true);
+              if (candidateComp12 === (boundEnd - 12 - dataStart)) {
+                compSz = candidateComp12;
+              }
+            }
+          }
+          const nextPos = compSz > 0 ? Math.min(u8.length, dataStart + compSz) : boundEnd;
           if (fileName.endsWith('.xml') && dataStart < u8.length) {
             try {
               const xmlStr = method === 0
                 ? new TextDecoder('utf-8').decode(u8.subarray(dataStart, nextPos))
-                : await inflateRawBytes(u8.subarray(dataStart));
-              if (xmlStr) entries[fileName.replace(/^\/+/, '')] = xmlStr;
+                : await inflateRawBytes(u8.subarray(dataStart, nextPos));
+              if (xmlStr) entries[fileName] = xmlStr;
             } catch (e) {
               addDebugLog(`Inflate err (${fileName}): ${e.message}`);
             }
@@ -652,11 +740,12 @@ function openExcelImportModal(targetType) {
           while ((rMatch = rowRegex.exec(xml)) !== null) {
             const rowInner = rMatch[1];
             const rowArr = [];
-            const cellRegex = /<(?:\w+:)?c\b([^>]*?)(\/?)>([\s\S]*?)<\/(?:\w+:)?c>|<(?:\w+:)?c\b([^>]*?)\/>/gi;
+            // Strict XML cell regex: branch 1 matches `<c ...>...</c>` (no trailing `/` in opening tag), branch 2 matches self-closing `<c .../>`
+            const cellRegex = /<(?:\w+:)?c\b([^>\/]*?)>([\s\S]*?)<\/(?:\w+:)?c>|<(?:\w+:)?c\b([^>]*?)\/>/gi;
             let cMatch;
             while ((cMatch = cellRegex.exec(rowInner)) !== null) {
-              const attrs = (cMatch[1] || cMatch[4] || '');
-              const cellInner = (cMatch[2] === '/' ? '' : (cMatch[3] || ''));
+              const attrs = (cMatch[1] || cMatch[3] || '');
+              const cellInner = (cMatch[2] || '');
               const refM = attrs.match(/\br=["']([A-Z]+\d+)["']/i);
               const typeM = attrs.match(/\bt=["']([^"']+)["']/i);
               const colIdx = refM ? colLettersToIdx(refM[1]) : rowArr.length;
@@ -787,7 +876,8 @@ function openExcelImportModal(targetType) {
               parsedRows.push(...rows);
               continue;
             }
-            // ZIP / XLSX or XLS
+            // ZIP / XLSX or XLS — First repair streaming ZIP local headers in-place so SheetJS reads Groww XLSX natively!
+            if (isZip) repairStreamingZipInPlace(u8);
             let wb = null;
             try {
               wb = XLSX.read(u8, { type: 'array', cellStyles: false, cellFormula: false });
@@ -829,8 +919,8 @@ function openExcelImportModal(targetType) {
         let addedCount = 0;
         let updatedCount = 0;
         if (targetType === 'mf') {
-          // First remove any corrupt "Imported Holding #" rows from older v2.1 imports
-          state.mutualFunds = state.mutualFunds.filter(f => !/^Imported Holding #/i.test(f.name));
+          // First remove any corrupt "Imported Holding #" or "Mutual Fund (Folio #)" ₹0 rows
+          state.mutualFunds = state.mutualFunds.filter(f => !/^Imported Holding #|^Mutual Fund \(Folio/i.test(f.name));
           parsedRows.forEach((row, idx) => {
             const name = pickField(row, ['scheme name', 'fund name', 'scheme', 'fund', 'name']);
             const units = cleanNum(pickField(row, ['unit', 'qty', 'quantity']));
